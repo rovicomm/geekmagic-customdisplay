@@ -192,3 +192,13 @@ def test_meter_paused_does_not_push():
     m.push = lambda u, force=False: pushes.append(u)
     m.paused = True
     assert m.tick().five_pct == 50 and pushes == []
+
+
+# --- tray ------------------------------------------------------------------------
+
+def test_launch_command_frozen_and_venv(monkeypatch):
+    from clockdisplay import tray
+    assert "-m clockdisplay.tray" in tray._launch_command()
+    monkeypatch.setattr(tray.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(tray.sys, "executable", r"D:\Apps\ClockDisplay.exe")
+    assert tray._launch_command() == r'"D:\Apps\ClockDisplay.exe"'

@@ -47,6 +47,8 @@ def render_icon(pct: float | None, active: bool = True, size: int = 64) -> Image
 # --- autostart (HKCU Run key) --------------------------------------------------
 
 def _launch_command() -> str:
+    if getattr(sys, "frozen", False):  # portable ClockDisplay.exe
+        return f'"{sys.executable}"'
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
     return f'"{pythonw if pythonw.exists() else exe}" -m clockdisplay.tray'
@@ -195,6 +197,11 @@ def _setup_logging() -> None:
 def main() -> None:
     if _already_running():
         return
+    if getattr(sys, "frozen", False):
+        # Entry-point backend discovery is unreliable inside a PyInstaller bundle.
+        import keyring
+        from keyring.backends.Windows import WinVaultKeyring
+        keyring.set_keyring(WinVaultKeyring())
     _setup_logging()
     log.info("starting (config dir %s)", config.config_dir())
     try:

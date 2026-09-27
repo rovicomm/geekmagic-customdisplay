@@ -59,6 +59,17 @@ The icon shows the 5h % and the tooltip shows both windows with their reset time
 Refresh now, Pause display updates, Restore clock theme, Edit settings, Open data folder,
 **Start with Windows** (an HKCU `Run` entry) and Quit. Only one instance runs at a time.
 
+### Portable exe
+```powershell
+.venv\Scripts\pip install -e ".[build]"
+.venv\Scripts\python scripts\build_exe.py     # -> dist\ClockDisplay.exe (~19 MB)
+```
+`ClockDisplay.exe` is the tray app as a single file with no Python needed, so it can be copied
+anywhere. It still uses the machine's Claude Code sign-in, Credential Manager and
+`%LOCALAPPDATA%\clockdisplay`. "Start with Windows" points at wherever the exe lives, so toggle
+it off and on again after moving it. One-file exes unpack to `%TEMP%` on launch (a second or two),
+and SmartScreen may warn the first time because the exe is unsigned.
+
 Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json` and `logs\tray.log`.
 `config.json` keys (re-read every poll):
 

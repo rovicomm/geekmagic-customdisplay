@@ -11,6 +11,7 @@ dependencies = ["pillow>=10.0.0", "keyring>=25", "pystray>=0.19"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+build = ["pyinstaller>=6.10"]
 
 [project.scripts]
 clock = "clockdisplay.cli:main"
