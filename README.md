@@ -163,6 +163,8 @@ settings live in the `adsb` block of `config.json` and are re-read every poll:
 clock planes                       # what's overhead now (--all: everything tracked)
 clock plane                        # push the nearest plane's card (or: clock plane BAW117 --out card.png)
 ```
+Photos are cached in `photos\` in the data folder: a photo is kept until there are 2000 of
+them (least recently shown go first), and a plane with no photo is looked up again after a week.
 `clock watch` runs the spotter alongside the usage meter. Type, registration and operator come
 from readsb's aircraft database, so they're blank on receivers that don't have it.
 
