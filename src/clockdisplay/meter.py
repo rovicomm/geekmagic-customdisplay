@@ -43,11 +43,14 @@ class Target:
     last_push: float | None = None
     pushed_key: tuple | None = None
     pushed_at: float = 0.0
+    popup: bool = True  # ADS-B planes may pop up over the usage card
 
     @property
     def status(self) -> str:
-        if self.app != "claude":
-            return self.app if self.app in config.APPS else f"unknown app {self.app!r}"
+        if self.app not in config.APPS:
+            return f"unknown app {self.app!r}"
+        if self.app == "off":
+            return "off"
         if self.paused:
             return "paused"
         return self.error or ("ok" if self.last_push is not None else "waiting")
@@ -65,6 +68,7 @@ class Meter:
         self.burn_rate: float | None = None  # 5h %/hour, None until there's enough history
         self.on_fire = False
         self._warned_apps: set[str] = set()
+        self.wake = threading.Event()  # set to make run() tick now
 
     def sync_targets(self, cfg: dict | None = None) -> None:
         """Match self.targets to the configured displays, keeping pause state and push history."""
@@ -75,6 +79,7 @@ class Meter:
             if t.host != d["host"]:
                 t.host, t.pushed_key, t.error, t.last_push = d["host"], None, None, None
             t.app = d["app"]
+            t.popup = d.get("adsb_popup", True) is not False
             if t.app not in config.APPS and t.app not in self._warned_apps:
                 self._warned_apps.add(t.app)
                 log.warning("display %s: unknown app %r, leaving it alone", t.name, t.app)
@@ -92,14 +97,17 @@ class Meter:
         if push is None:
             push = cfg["autopush"] and not self.paused
         if push:
-            key = (round(usage.five_pct), round(usage.week_pct), self.on_fire)
-            now = self.clock()
+            key, now = self._key(usage), self.clock()
             due = [t for t in self.targets.values()
                    if t.app == "claude" and not t.paused and not t.hold
                    and (force or key != t.pushed_key or now - t.pushed_at >= cfg["force_push"])]
             if due:
                 self._push_all(due, self.render(usage), force, key, now)
         return usage
+
+    def _key(self, usage: Usage) -> tuple:
+        """What's on the card, as far as deciding whether it needs re-pushing goes."""
+        return round(usage.five_pct), round(usage.week_pct), self.on_fire
 
     def _update_burn(self, pct: float, cfg: dict) -> None:
         """Track the 5h %/hour over the last fire_window seconds and light or put out the fire."""
@@ -144,6 +152,28 @@ class Meter:
         targets = [t for t in self.targets.values() if t.app == "claude" and not t.paused and not t.hold]
         self._push_all(targets, self.render(usage), force)
 
+    def flash(self, t: Target, content, seconds: float, stop: threading.Event) -> None:
+        """Show `content` on one display for `seconds` (blocking), then hand the display
+        back: the last usage card goes straight back up (no waiting for a fetch, which may be
+        rate limited), or the clock theme is restored for other displays (an "adsb" display
+        then shows its next plane). Raises if the display can't be reached. No-op if it's
+        already held."""
+        if t.hold:
+            return
+        t.hold = True
+        try:
+            self.display_factory(t.host).show(content, force=True)
+            stop.wait(seconds)
+        finally:
+            t.hold = False
+        self.invalidate(t.name)
+        if t.app == "claude" and not t.paused and not self.paused:
+            if self.last is not None:
+                self._push_all([t], self.render(self.last), True, self._key(self.last), self.clock())
+                return
+            self.wake.set()  # no usage yet: show the clock until the meter has some
+        self.display_factory(t.host).restore()
+
     def _push_all(self, targets: list[Target], content, force: bool,
                   key: tuple | None = None, now: float | None = None) -> None:
         def one(t: Target) -> None:
@@ -168,7 +198,7 @@ class Meter:
     def run(self, stop: threading.Event, on_update: Callable[[Usage | Exception], None] = lambda _: None,
             wake: threading.Event | None = None) -> None:
         """Poll until `stop` is set. Setting `wake` triggers an immediate refresh."""
-        wake = wake or threading.Event()
+        wake = self.wake = wake or self.wake
         failures = 0
         while not stop.is_set():
             interval = int(config.load_config()["poll_interval"])

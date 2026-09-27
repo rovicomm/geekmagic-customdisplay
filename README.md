@@ -24,8 +24,8 @@ off Windows):
   ]
 }
 ```
-`app` says what the display runs: `claude` (the usage meter, the default) or `off` (leave it
-alone). An older config with a single `"host"` still works and counts as one display.
+`app` says what the display runs: `claude` (the usage meter, the default), `adsb` (aircraft
+overhead, see [Aircraft overhead](#aircraft-overhead-ads-b)) or `off` (leave it alone). An older config with a single `"host"` still works and counts as one display.
 Give each display a name you'll recognise. Use **Rename…** in the tray, `clock rename display desk`,
 or the file itself. **Identify** in the tray shows the name and IP on that screen for a few
 seconds, so you can tell which physical display is which.
@@ -117,6 +117,54 @@ An even pace uses up the 5h window at 20 %/h. When the rate over the last `fire_
 card once the rate falls below half of `fire_rate`, or when the window resets. Preview it with
 `clock demo --fire --out fire.gif`, or watch it on the device in
 [docs/images/fire.mp4](docs/images/fire.mp4).
+
+## Aircraft overhead (ADS-B)
+With a local ADS-B receiver running readsb, tar1090, dump1090-fa or piaware, the displays can
+show the planes flying over you. Each one gets a card with a photo (from
+[planespotters.net](https://www.planespotters.net), credited on screen), callsign, altitude with
+a climb/descent arrow, type, registration, operator, speed, and distance/direction. Point the
+app at the receiver's web address, the same one that shows its map:
+```json
+{
+  "displays": [{"name": "desk", "host": "192.168.1.50", "app": "claude"}],
+  "adsb": {"url": "http://192.168.1.20:8080", "radius": 5, "popup_seconds": 30}
+}
+```
+* On a **`claude`** display, a plane that comes within range **pops up** over the usage card for
+  `popup_seconds`, then the usage card comes back. The same plane won't pop up again for
+  `cooldown` seconds. Set `"adsb_popup": false` on a display to keep pop-ups off it.
+* An **`adsb`** display shows the nearest plane in range all the time and goes back to its
+  clock theme when none is in range.
+
+The tray's **Aircraft** menu shows what's overhead. From it you can switch spotting and pop-ups on
+and off, choose the pop-up length and radius, pick which fields the card shows, set the receiver
+URL, open the receiver's map, and pop up the nearest plane now to try things out. The other
+settings live in the `adsb` block of `config.json` and are re-read every poll:
+
+| key | default | |
+| --- | --- | --- |
+| `url` | `""` | receiver base URL; nothing happens until it's set |
+| `enabled` | `true` | master switch |
+| `radius` | `5` | nautical miles from `location` that count as overhead |
+| `location` | receiver's | `[lat, lon]` to measure from, if not the receiver's own position |
+| `min_altitude` / `max_altitude` | `0` / `0` | feet; a `max_altitude` of `0` means no ceiling |
+| `include_ground` | `false` | also show aircraft on the ground |
+| `types` | `[]` | only these ICAO type-code prefixes, e.g. `["B74", "A38"]` |
+| `callsigns` | `[]` | only these callsign prefixes, e.g. `["BAW", "DAL"]` |
+| `military_only` | `false` | only aircraft flagged military in the receiver's database |
+| `popup` | `true` | pop planes up over `claude` displays |
+| `popup_seconds` | `30` | how long a pop-up stays |
+| `cooldown` | `1800` | seconds before the same plane can pop up again |
+| `refresh` | `20` | seconds between card refreshes on `adsb` displays |
+| `poll_interval` | `5` | seconds between receiver polls |
+| `fields` | all but `squawk` | card contents: `photo`, `callsign`, `altitude`, `type`, `registration`, `operator`, `speed`, `distance`, `squawk` |
+
+```powershell
+clock planes                       # what's overhead now (--all: everything tracked)
+clock plane                        # push the nearest plane's card (or: clock plane BAW117 --out card.png)
+```
+`clock watch` runs the spotter alongside the usage meter. Type, registration and operator come
+from readsb's aircraft database, so they're blank on receivers that don't have it.
 
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous

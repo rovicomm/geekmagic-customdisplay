@@ -16,6 +16,7 @@ from pathlib import Path
 from PIL import Image
 
 from clockdisplay import config
+from clockdisplay.adsb.source import SourceError
 from clockdisplay.claude import auth
 from clockdisplay.claude.auth import AuthError
 from clockdisplay.claude.usage import RateLimited, fetch_usage
@@ -199,12 +200,65 @@ def cmd_auth(args):
 
 def cmd_watch(args):
     import logging
+    from clockdisplay.adsb.spotter import Spotter
     from clockdisplay.meter import Meter
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    stop, meter = threading.Event(), Meter()
+    spotter = Spotter(meter)
+    threading.Thread(target=spotter.run, args=(stop,), name="adsb", daemon=True).start()
     try:
-        Meter().run(threading.Event())
+        meter.run(stop)
     except KeyboardInterrupt:
         pass
+    finally:
+        stop.set()
+        spotter.wake.set()
+
+
+# --- aircraft ------------------------------------------------------------------
+
+def _spotter():
+    from clockdisplay.adsb.spotter import Spotter
+    from clockdisplay.meter import Meter
+    sp = Spotter(Meter())
+    sp.refresh(ignore_enabled=True)  # one-off commands work even with spotting switched off
+    if not sp.settings["url"]:
+        raise ValueError('no ADS-B receiver configured: set "adsb": {"url": "http://..."} in '
+                         f"{config.config_file()}")
+    return sp
+
+
+def cmd_planes(args):
+    from clockdisplay.adsb.card import altitude_text
+    sp = _spotter()
+    rows = sp.nearby if not args.all else sorted(
+        sp.aircraft, key=lambda ac: (ac.distance is None, ac.distance or 0))
+    radius = sp.settings["radius"]
+    print(f"{len(sp.nearby)} of {len(sp.aircraft)} tracked aircraft within {radius} nm and your filters")
+    for ac in rows:
+        dist = "" if ac.distance is None else f"{ac.distance:5.1f} nm {ac.direction:<2}"
+        print(f"  {ac.hex:<7} {ac.name:<9} {ac.type_code:<5} {altitude_text(ac):>10}  {dist:<11} "
+              f"{ac.description}")
+
+
+def cmd_plane(args):
+    sp = _spotter()
+    if args.query:
+        q = args.query.strip().lower()
+        found = [ac for ac in sp.aircraft
+                 if q in (ac.hex, ac.callsign.lower(), ac.registration.lower().replace("-", ""),
+                          ac.registration.lower())]
+        if not found:
+            raise ValueError(f"no tracked aircraft matches {args.query!r} (see `clock planes --all`)")
+        ac = found[0]
+    else:
+        pool = sp.nearby or sorted((a for a in sp.aircraft if a.distance is not None),
+                                   key=lambda a: a.distance)
+        if not pool:
+            raise ValueError("the receiver isn't tracking any aircraft with a position")
+        ac = pool[0]
+    print(f"{ac.name} ({ac.hex}) {ac.description or ac.type_code}")
+    _output(args, sp.card(ac))
 
 
 # --- render commands ---------------------------------------------------------
@@ -317,7 +371,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--logout", action="store_true", help="clear the cached token")
     sp.set_defaults(fn=cmd_auth)
 
-    sub.add_parser("watch", help="keep the display updated with live usage (Ctrl+C to stop)").set_defaults(fn=cmd_watch)
+    sub.add_parser("watch", help="keep the displays updated with live usage and overhead aircraft "
+                                 "(Ctrl+C to stop)").set_defaults(fn=cmd_watch)
+
+    sp = sub.add_parser("planes", help="aircraft overhead right now, per the adsb settings")
+    sp.add_argument("--all", action="store_true", help="every tracked aircraft, nearest first")
+    sp.set_defaults(fn=cmd_planes)
+
+    sp = render_cmd("plane", cmd_plane, "show the aircraft card for the nearest plane, or QUERY")
+    sp.add_argument("query", nargs="?", help="ICAO hex, callsign or registration")
 
     sp = render_cmd("text", cmd_text, "full-screen auto-sized text ('\\n' for new lines)")
     sp.add_argument("message")
@@ -365,7 +427,7 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     try:
         args.fn(args)
-    except (DeviceError, AuthError, RateLimited, urllib.error.URLError,
+    except (DeviceError, SourceError, AuthError, RateLimited, urllib.error.URLError,
             PermissionError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
