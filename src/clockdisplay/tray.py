@@ -1,4 +1,5 @@
-"""System-tray app: keeps the configured SmallTV displays showing live Claude usage.
+"""System-tray app: keeps the configured SmallTV displays showing live Claude usage, and
+pops up aircraft flying overhead when an ADS-B receiver is configured.
 
 Run with `clock-tray` (pythonw, no console) or `python -m clockdisplay.tray`.
 Logs go to %LOCALAPPDATA%\\clockdisplay\\logs\\tray.log.
@@ -14,11 +15,13 @@ import threading
 import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Callable
 
 import pystray
 from PIL import Image, ImageDraw
 
 from clockdisplay import config
+from clockdisplay.adsb.spotter import Spotter
 from clockdisplay.claude.auth import AuthError
 from clockdisplay.claude.usage import RateLimited, Usage
 from clockdisplay.device import UltraDevice
@@ -33,6 +36,11 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 GREY = (150, 150, 150)
 TRACK = (70, 70, 70)
 IDENTIFY_SECONDS = 6
+POPUP_CHOICES = (10, 20, 30, 45, 60, 120)  # seconds
+RADIUS_CHOICES = (1, 2, 3, 5, 10, 25)      # nautical miles
+FIELD_LABELS = {"photo": "Photo", "callsign": "Callsign", "route": "Route (airports)", "altitude": "Altitude",
+                "type": "Aircraft type", "registration": "Registration", "operator": "Operator",
+                "speed": "Speed", "distance": "Distance and direction", "squawk": "Squawk"}
 
 
 # --- icon ----------------------------------------------------------------------
@@ -122,6 +130,7 @@ def _already_running() -> bool:
 class TrayApp:
     def __init__(self):
         self.meter = Meter()
+        self.spotter = Spotter(self.meter)
         self.stop, self.wake = threading.Event(), threading.Event()
         self.error: str | None = None
         self.meter.sync_targets()
@@ -139,6 +148,7 @@ class TrayApp:
             item("Restore all clock themes", self._restore_all),
             pystray.Menu.SEPARATOR,
             *(item(t.name, self._display_menu(t.name)) for t in self.meter.targets.values()),
+            item("Aircraft", self._aircraft_menu()),
             pystray.Menu.SEPARATOR,
             item("Edit settings", self._edit_settings),
             item("Open data folder", lambda: os.startfile(config.config_dir())),
@@ -163,6 +173,85 @@ class TrayApp:
             item("Restore clock theme", lambda: self._restore(name)),
             item("Open web UI", lambda: (t := target()) and webbrowser.open(f"http://{t.host}")),
         )
+
+    def _aircraft_menu(self) -> pystray.Menu:
+        item = pystray.MenuItem
+        sp = self.spotter
+
+        def setting(key: str):
+            return sp.settings[key]
+
+        def choose(key: str, value) -> Callable:
+            return lambda: self._set_adsb(key, value)
+
+        def toggle_field(name: str) -> Callable:
+            def run() -> None:
+                fields = list(setting("fields"))
+                fields.remove(name) if name in fields else fields.append(name)
+                self._set_adsb("fields", fields)
+            return run
+
+        return pystray.Menu(
+            item(lambda _: sp.status(), None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            item("Enabled", lambda: self._set_adsb("enabled", not setting("enabled")),
+                 checked=lambda _: bool(setting("enabled"))),
+            item("Pop up over Claude usage", lambda: self._set_adsb("popup", not setting("popup")),
+                 checked=lambda _: bool(setting("popup"))),
+            item("Show nearest now", self._show_nearest, enabled=lambda _: sp.active),
+            pystray.Menu.SEPARATOR,
+            item("Pop-up length", pystray.Menu(
+                item("Until the plane leaves the pop-up radius", choose("popup_seconds", 0), radio=True,
+                     checked=lambda _: not setting("popup_seconds")),
+                *(item(f"{s} seconds", choose("popup_seconds", s), radio=True,
+                       checked=lambda _, s=s: float(setting("popup_seconds") or 0) == s)
+                  for s in POPUP_CHOICES))),
+            item("Overhead radius", pystray.Menu(*(
+                item(f"{r} nm", choose("radius", r), radio=True,
+                     checked=lambda _, r=r: float(setting("radius")) == r)
+                for r in RADIUS_CHOICES))),
+            item("Pop-up radius", pystray.Menu(
+                item("Same as overhead radius", choose("popup_radius", 0), radio=True,
+                     checked=lambda _: not setting("popup_radius")),
+                *(item(f"{r} nm", choose("popup_radius", r), radio=True,
+                       checked=lambda _, r=r: float(setting("popup_radius") or 0) == r)
+                  for r in RADIUS_CHOICES))),
+            item("Card shows", pystray.Menu(*(
+                item(label, toggle_field(name), checked=lambda _, n=name: n in setting("fields"))
+                for name, label in FIELD_LABELS.items()))),
+            pystray.Menu.SEPARATOR,
+            item("Set receiver URL…", self._ask_receiver_url),
+            item("Open receiver map", lambda: webbrowser.open(setting("url")),
+                 enabled=lambda _: bool(setting("url"))),
+        )
+
+    def _set_adsb(self, key: str, value) -> None:
+        config.set_adsb(key, value)
+        self.spotter.settings = config.load_config()["adsb"]  # so the menu ticks update now
+        self.spotter.wake.set()
+        self.icon.update_menu()
+
+    def _ask_receiver_url(self) -> None:
+        def run() -> None:
+            url = ask_text("ADS-B receiver", "Base URL of your readsb / tar1090 / dump1090 receiver:",
+                           self.spotter.settings["url"] or "http://")
+            if url and url.rstrip("/") not in ("http:", "https:"):
+                self._set_adsb("url", url.rstrip("/"))
+
+        threading.Thread(target=run, name="adsb-url", daemon=True).start()
+
+    def _show_nearest(self) -> None:
+        def run() -> None:
+            try:
+                ac = self.spotter.show_nearest(self.stop)
+            except Exception as e:
+                log.warning("show nearest failed: %s", e)
+                self.icon.notify(f"Couldn't reach the ADS-B receiver: {e}"[:250], APP_NAME)
+                return
+            if ac is None:
+                self.icon.notify("No aircraft with a position right now", APP_NAME)
+
+        threading.Thread(target=run, name="adsb-show", daemon=True).start()
 
     def _status_line(self) -> str:
         u = self.meter.last
@@ -252,21 +341,11 @@ class TrayApp:
             return
 
         def run() -> None:
-            t.hold = True
             try:
-                Display(UltraDevice(t.host)).show(frames.identify(t.name, t.host), force=True)
-                self.stop.wait(IDENTIFY_SECONDS)
+                self.meter.flash(t, frames.identify(t.name, t.host), IDENTIFY_SECONDS, self.stop)
             except Exception as e:
                 log.warning("identify %s failed: %s", t.name, e)
                 self.icon.notify(f"Couldn't reach {t.name} ({t.host})", APP_NAME)
-                return
-            finally:
-                t.hold = False
-            if t.app == "claude" and not t.paused and not self.meter.paused:
-                self.meter.invalidate(t.name)  # the meter re-pushes the usage card
-                self.wake.set()
-            else:
-                self._restore_device(t)
 
         threading.Thread(target=run, name="identify", daemon=True).start()
 
@@ -301,6 +380,7 @@ class TrayApp:
     def _quit(self) -> None:
         self.stop.set()
         self.wake.set()
+        self.spotter.wake.set()
         self.icon.stop()
 
     def _setup(self, icon: pystray.Icon) -> None:
@@ -308,6 +388,9 @@ class TrayApp:
         worker = threading.Thread(target=self.meter.run, name="meter", daemon=True,
                                   args=(self.stop, self._on_update, self.wake))
         worker.start()
+        spotter = threading.Thread(target=self.spotter.run, name="adsb", daemon=True,
+                                   args=(self.stop, self.icon.update_menu))
+        spotter.start()
 
     def run(self) -> None:
         self.icon.run(setup=self._setup)

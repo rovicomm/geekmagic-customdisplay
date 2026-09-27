@@ -1,8 +1,9 @@
 # geekmagic-customdisplay
 
 Drive a GeekMagic **SmallTV-Ultra** (240×240) over the LAN: push rendered frames, animated
-GIFs and device settings. This is the groundwork for a Claude usage meter. The device API is
-documented in [docs/ultra-api.md](docs/ultra-api.md).
+GIFs and device settings. On top of that it runs a live **Claude usage meter**, and with a local
+ADS-B receiver it pops up the **aircraft flying overhead**. The device API is documented in
+[docs/ultra-api.md](docs/ultra-api.md).
 
 <p align="center"><img src="docs/images/geekmagic.jpg" alt="SmallTV-Ultra showing the Claude usage card" width="360"></p>
 
@@ -24,8 +25,9 @@ off Windows):
   ]
 }
 ```
-`app` says what the display runs: `claude` (the usage meter, the default) or `off` (leave it
-alone). An older config with a single `"host"` still works and counts as one display.
+`app` says what the display runs: `claude` (the usage meter, the default), `adsb` (aircraft
+overhead, see [Aircraft overhead](#aircraft-overhead-ads-b)) or `off` (leave it alone). An older
+config with a single `"host"` still works and counts as one display.
 Give each display a name you'll recognise. Use **Rename…** in the tray, `clock rename display desk`,
 or the file itself. **Identify** in the tray shows the name and IP on that screen for a few
 seconds, so you can tell which physical display is which.
@@ -69,7 +71,7 @@ install Claude Code and run `claude` once to sign in first.
 ```powershell
 clock auth                         # where the token comes from and when it expires
 clock usage                        # fetch once, print and push the usage card (--no-push, --out)
-clock watch                        # keep every `claude` display updated in the foreground
+clock watch                        # keep the displays updated in the foreground (usage + aircraft)
 ```
 Tokens: the credentials in `%USERPROFILE%\.claude\.credentials.json` are the source of truth.
 A cached copy lives in **Windows Credential Manager** (`clockdisplay` / `claude-oauth`). When a
@@ -84,7 +86,8 @@ The icon shows the 5h % and the tooltip shows both windows with their reset time
 displays are unreachable. Usage is fetched once per poll and pushed to every `claude` display in
 parallel, so one display that is offline doesn't hold up the others. The menu has Refresh now,
 Pause all displays, Restore all clock themes, a submenu for each display (status, Identify, Rename…,
-Pause updates, Restore clock theme, Open web UI), Edit settings, Open data folder, **Start with Windows** (an
+Pause updates, Restore clock theme, Open web UI), an **Aircraft** submenu (see
+[below](#aircraft-overhead-ads-b)), Edit settings, Open data folder, **Start with Windows** (an
 HKCU `Run` entry) and Quit. Displays added to or removed from `config.json` show up on the next
 poll. Only one instance runs at a time.
 
@@ -99,7 +102,8 @@ anywhere. It still uses the machine's Claude Code sign-in, Credential Manager an
 it off and on again after moving it. One-file exes unpack to `%TEMP%` on launch (a second or two),
 and SmartScreen may warn the first time because the exe is unsigned.
 
-Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json` and `logs\tray.log`.
+Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json`, `logs\tray.log` and the
+aircraft photo cache `photos\`.
 `config.json` keys (re-read every poll):
 
 | key | default | |
@@ -117,6 +121,101 @@ An even pace uses up the 5h window at 20 %/h. When the rate over the last `fire_
 card once the rate falls below half of `fire_rate`, or when the window resets. Preview it with
 `clock demo --fire --out fire.gif`, or watch it on the device in
 [docs/images/fire.mp4](docs/images/fire.mp4).
+
+## Aircraft overhead (ADS-B)
+If you run an ADS-B receiver on your network (readsb, tar1090, dump1090-fa or piaware), the
+displays can show the planes flying over you. When one comes within range it pops up over the
+Claude usage card, then the usage card comes back:
+
+<p align="center"><img src="docs/images/adsb.png" alt="The Claude usage card, an airliner's pop-up card with photo and route, and a light aircraft's card without a photo" width="792"></p>
+
+<sub>Sample data. The photo is an illustration; real photos come from planespotters.net.</sub>
+
+The card shows:
+* a **photo** from [planespotters.net](https://www.planespotters.net), with the photographer
+  credited as their terms require. Planes without one get the larger text-only layout on the right.
+* **callsign** and **altitude**, with an arrow when the plane is climbing or descending.
+* the **route**, e.g. `LHR → JFK London – New York`. It comes from the crowd-sourced routeset API
+  that tar1090 uses ([adsb.im](https://adsb.im)). Only airline callsigns are looked up, and routes
+  that don't match where the plane actually is are dropped.
+* **type**, **registration** and **operator**, from readsb's aircraft database (blank on receivers
+  without it).
+* **speed**, and **distance and direction** from you.
+
+Each of these can be switched off, and the photo shrinks to make room for whatever you keep.
+
+### Setup
+Point the app at the receiver's web address, the same one that shows its map, or use
+**Aircraft → Set receiver URL…** in the tray:
+```json
+{
+  "displays": [{"name": "desk", "host": "192.168.1.50", "app": "claude"}],
+  "adsb": {"url": "http://192.168.1.20:8080"}
+}
+```
+Distances are measured from the receiver's own position. Set `"location": [lat, lon]` if you
+want them measured from somewhere else, or if your receiver doesn't publish its position.
+
+### What pops up, and for how long
+* **What counts as overhead** is anything within `radius` nautical miles (default 5) that passes your
+  filters: altitude band, aircraft type, airline, ground traffic, military only.
+* **What can interrupt** a `claude` display is anything within `popup_radius`. By default that's the
+  same as `radius`; set it smaller so that only planes passing close by take over the screen.
+* **How long** a pop-up lasts is `popup_seconds` (default 30). Set it to `0` ("Until the plane
+  leaves" in the tray) to keep the card up until the plane flies back out of `popup_radius`,
+  updating as it goes. If another plane is already waiting, the display moves straight on to it
+  instead of briefly showing the usage card in between. A plane circling nearby lets go after
+  `popup_max` seconds.
+* The same plane doesn't pop up again for `cooldown` seconds (default 30 minutes). A plane that
+  arrives while another is on screen gets its turn afterwards, if it's still in range.
+* Set `"adsb_popup": false` on a display to keep pop-ups off it. A display with `"app": "adsb"`
+  shows the nearest plane all the time instead, and goes back to its clock theme when the sky
+  is empty.
+
+### Tray
+The **Aircraft** menu shows how many planes are overhead and the nearest one. From it you can:
+* switch spotting and pop-ups on and off;
+* set the pop-up length, the overhead radius and the pop-up radius;
+* choose which fields the card shows;
+* set the receiver URL, or open the receiver's map;
+* pop up the nearest plane now to try out your settings.
+
+### CLI
+```powershell
+clock planes                       # what's overhead now, * = would pop up (--all: everything tracked)
+clock plane                        # push the nearest plane's card
+clock plane BAW117 --out card.png  # a particular plane (callsign, registration or hex), saved locally
+```
+`clock watch` runs the spotter alongside the usage meter.
+
+### Settings
+All in the `adsb` block of `config.json`, re-read every poll:
+
+| key | default | |
+| --- | --- | --- |
+| `url` | `""` | receiver base URL; nothing happens until it's set |
+| `enabled` | `true` | master switch |
+| `radius` | `5` | nautical miles from `location` that count as overhead |
+| `location` | receiver's | `[lat, lon]` to measure from |
+| `min_altitude` / `max_altitude` | `0` / `0` | feet; a `max_altitude` of `0` means no ceiling |
+| `include_ground` | `false` | also show aircraft on the ground |
+| `types` | `[]` | only these ICAO type-code prefixes, e.g. `["B74", "A38"]` |
+| `callsigns` | `[]` | only these callsign prefixes (airlines), e.g. `["BAW", "DAL"]` |
+| `military_only` | `false` | only aircraft flagged military in the receiver's database |
+| `popup` | `true` | pop planes up over `claude` displays |
+| `popup_radius` | `0` | nautical miles within which a plane can interrupt; `0` = same as `radius` |
+| `popup_seconds` | `30` | how long a pop-up stays; `0` = until the plane leaves `popup_radius` |
+| `popup_max` | `600` | longest an until-it-leaves pop-up can stay, in seconds |
+| `cooldown` | `1800` | seconds before the same plane can pop up again |
+| `refresh` | `20` | seconds between card updates while a plane is on screen |
+| `poll_interval` | `5` | seconds between receiver polls |
+| `fields` | all but `squawk` | card contents: `photo`, `callsign`, `route`, `altitude`, `type`, `registration`, `operator`, `speed`, `distance`, `squawk` |
+| `route_api` | adsb.im | tar1090-style routeset endpoint the routes come from |
+
+Photos are cached in `photos\` in the data folder. A photo is kept until there are 2000 of them
+(the least recently shown go first), and a plane with no photo is looked up again after a week.
+Routes are cached in memory for an hour. Regenerate the image above with
+`.venv\Scripts\python scripts\readme_images.py`.
 
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous

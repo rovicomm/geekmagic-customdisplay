@@ -26,7 +26,33 @@ DEFAULTS = {
     "fire_window": 600,    # seconds of history the burn rate is measured over
 }
 
-APPS = ("claude", "off")  # what a display can run; "claude" is the usage meter
+# Plane spotting from a local ADS-B receiver (readsb/tar1090/dump1090 "aircraft.json").
+ADSB_DEFAULTS = {
+    "enabled": True,        # still does nothing until "url" is set
+    "url": "",              # receiver base URL, e.g. http://192.168.1.20:8080
+    "poll_interval": 5,     # seconds between aircraft.json fetches
+    "location": None,       # [lat, lon] to measure from; default: the receiver's own position
+    "radius": 5,            # nautical miles from location that counts as "overhead"
+    "min_altitude": 0,      # feet
+    "max_altitude": 0,      # feet; 0 = no ceiling
+    "include_ground": False,
+    "types": [],            # ICAO type-code prefixes to show, e.g. ["B74", "A38"]; [] = all
+    "callsigns": [],        # callsign prefixes to show, e.g. ["BAW", "DAL"]; [] = all
+    "military_only": False,
+    "popup": True,          # pop planes up over "claude" displays
+    "popup_seconds": 30,    # how long a pop-up stays; 0 = until the plane leaves popup_radius
+    "popup_max": 600,       # seconds cap on an until-it-leaves pop-up (circling traffic)
+    "popup_radius": 0,      # nautical miles within which a plane may interrupt; 0 = same as radius
+    "cooldown": 1800,       # seconds before the same aircraft can pop up again
+    "refresh": 20,          # seconds between card refreshes on "adsb" displays
+    "fields": ["photo", "callsign", "route", "type", "registration", "operator",
+               "altitude", "speed", "distance"],
+    "route_api": "https://adsb.im/api/0/routeset",  # tar1090's routeset format
+}
+ADSB_FIELDS = ("photo", "callsign", "route", "type", "registration", "operator", "altitude",
+               "speed", "distance", "squawk")
+
+APPS = ("claude", "adsb", "off")  # what a display can run; "claude" is the usage meter
 _FLAT_STATE = ("previous_theme", "showing", "hash")  # pre-multi-display state.json keys
 
 _LEGACY_DIR = Path.home() / ".config" / "clockdisplay"
@@ -139,6 +165,8 @@ def rename_display(old: str, new: str) -> None:
 def load_config() -> dict:
     """Settings with defaults filled in; $CLOCK_HOST still wins for the host."""
     cfg = {**DEFAULTS, **_read("config.json")}
+    adsb = cfg.get("adsb")
+    cfg["adsb"] = {**ADSB_DEFAULTS, **(adsb if isinstance(adsb, dict) else {})}
     cfg["host"] = resolve_host()
     cfg["displays"] = load_displays()
     return cfg
@@ -146,6 +174,15 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     _write("config.json", cfg)
+
+
+def set_adsb(key: str, value) -> None:
+    """Change one key of the "adsb" block in config.json, leaving the rest of the file alone."""
+    raw = _read("config.json")
+    if not isinstance(raw.get("adsb"), dict):
+        raw["adsb"] = {}
+    raw["adsb"][key] = value
+    save_config(raw)
 
 
 _state_lock = threading.Lock()
