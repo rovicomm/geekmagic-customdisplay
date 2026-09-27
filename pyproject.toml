@@ -7,13 +7,16 @@ name = "clockdisplay"
 version = "0.1.0"
 description = "Control a GeekMagic SmallTV-Ultra display over the LAN: render and push frames, GIFs and settings."
 requires-python = ">=3.10"
-dependencies = ["pillow>=10.0.0"]
+dependencies = ["pillow>=10.0.0", "keyring>=25", "pystray>=0.19"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
 [project.scripts]
 clock = "clockdisplay.cli:main"
+
+[project.gui-scripts]
+clock-tray = "clockdisplay.tray:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

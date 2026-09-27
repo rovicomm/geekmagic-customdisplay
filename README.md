@@ -10,7 +10,7 @@ python -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
 ```
 Default host is `192.0.2.10`. Override it with `--host`, `$env:CLOCK_HOST`, or
-`~/.config/clockdisplay/config.json` (`{"host": "..."}`).
+`config.json` in `%LOCALAPPDATA%\clockdisplay` (`{"host": "..."}`; `~/.config/clockdisplay` off Windows).
 
 ## CLI
 ```powershell
@@ -36,6 +36,38 @@ clock clean                        # delete only our cm_* files
 ```
 Add `--out file.png` (or `.gif` for animations) to any render command to preview it locally
 without touching the device.
+
+## Claude usage
+Live 5h-session / 7d-weekly usage (the same numbers as Claude → Settings → Usage) comes from
+Anthropic's OAuth usage endpoint, authenticated with your existing **Claude Code** sign-in, so
+install Claude Code and run `claude` once to sign in first.
+```powershell
+clock auth                         # where the token comes from and when it expires
+clock usage                        # fetch once, print and push the usage card (--no-push, --out)
+clock watch                        # keep the display updated in the foreground
+```
+Tokens: the credentials in `%USERPROFILE%\.claude\.credentials.json` are the source of truth.
+A cached copy lives in **Windows Credential Manager** (`clockdisplay` / `claude-oauth`). When a
+token expires the app refreshes it and writes the rotated pair back to Claude Code's file so
+the `claude` CLI stays signed in. `clock auth --logout` clears the cached copy.
+
+### Tray app
+```powershell
+.venv\Scripts\clock-tray.exe       # or: pythonw -m clockdisplay.tray
+```
+The icon shows the 5h % and the tooltip shows both windows with their reset times. The menu has
+Refresh now, Pause display updates, Restore clock theme, Edit settings, Open data folder,
+**Start with Windows** (an HKCU `Run` entry) and Quit. Only one instance runs at a time.
+
+Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json` and `logs\tray.log`.
+`config.json` keys (re-read every poll):
+
+| key | default | |
+| --- | --- | --- |
+| `host` | `192.0.2.10` | display IP |
+| `poll_interval` | `60` | seconds between fetches; below ~30 s triggers rate limiting |
+| `force_push` | `600` | re-push unchanged numbers so the countdowns stay fresh |
+| `autopush` | `true` | `false` = tray only, leave the display alone |
 
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous
