@@ -4,6 +4,11 @@ Drive a GeekMagic **SmallTV-Ultra** (240×240) over the LAN: push rendered frame
 GIFs and device settings. This is the groundwork for a Claude usage meter. The device API is
 documented in [docs/ultra-api.md](docs/ultra-api.md).
 
+<p align="center"><img src="docs/images/geekmagic.jpg" alt="SmallTV-Ultra showing the Claude usage card" width="360"></p>
+
+The idea comes from [claude-meter](https://github.com/shavindraSN/claude-meter) by
+[@shavindraSN](https://github.com/shavindraSN).
+
 ## Setup
 ```powershell
 python -m venv .venv
@@ -85,7 +90,8 @@ Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json` and `lo
 An even pace uses up the 5h window at 20 %/h. When the rate over the last `fire_window` reaches
 `fire_rate`, the card becomes a looping GIF with flames on the 5h line. It goes back to the still
 card once the rate falls below half of `fire_rate`, or when the window resets. Preview it with
-`clock demo --fire --out fire.gif`.
+`clock demo --fire --out fire.gif`, or watch it on the device in
+[docs/images/fire.mp4](docs/images/fire.mp4).
 
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous
