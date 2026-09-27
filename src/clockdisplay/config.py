@@ -1,6 +1,8 @@
 """Host resolution, settings and small persistent state.
 
-Host lookup order: explicit argument > $CLOCK_HOST > config file "host" > DEFAULT_HOST.
+Displays come from config.json "displays": [{"name", "host", "app"}]. Configs without it
+(the old single "host" key) are treated as one display. Default host lookup order:
+explicit argument > $CLOCK_HOST > first display > config file "host" > DEFAULT_HOST.
 Config/state live in %LOCALAPPDATA%\\clockdisplay on Windows, ~/.config/clockdisplay
 elsewhere (override dir with $CLOCK_CONFIG_DIR). Secrets never go here; see claude.auth.
 """
@@ -10,6 +12,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 DEFAULT_HOST = "192.0.2.10"
@@ -22,6 +25,9 @@ DEFAULTS = {
     "fire_rate": 40,       # 5h burn in %/hour that sets the 5h line on fire (0 = off; 20 = even pace)
     "fire_window": 600,    # seconds of history the burn rate is measured over
 }
+
+APPS = ("claude", "off")  # what a display can run; "claude" is the usage meter
+_FLAT_STATE = ("previous_theme", "showing", "hash")  # pre-multi-display state.json keys
 
 _LEGACY_DIR = Path.home() / ".config" / "clockdisplay"
 _migrated = False
@@ -76,13 +82,65 @@ def _write(name: str, data: dict) -> None:
 
 
 def resolve_host(explicit: str | None = None) -> str:
-    return explicit or os.environ.get("CLOCK_HOST") or _read("config.json").get("host") or DEFAULT_HOST
+    cfg = _read("config.json")
+    first = next((d.get("host") for d in cfg.get("displays") or [] if isinstance(d, dict)), None)
+    return explicit or os.environ.get("CLOCK_HOST") or first or cfg.get("host") or DEFAULT_HOST
+
+
+def load_displays() -> list[dict]:
+    """Configured displays, normalised; a legacy single-host config becomes one display."""
+    raw = _read("config.json").get("displays")
+    if not isinstance(raw, list):
+        return [{"name": "display", "host": resolve_host(), "app": "claude"}]
+    displays, names = [], set()
+    for d in raw:
+        if not isinstance(d, dict) or not d.get("host"):
+            continue
+        host = str(d["host"])
+        name = str(d.get("name") or host)
+        if name in names:
+            continue
+        names.add(name)
+        displays.append({**d, "name": name, "host": host, "app": d.get("app") or "claude"})
+    return displays
+
+
+def find_display(name: str) -> dict:
+    displays = load_displays()
+    for d in displays:
+        if d["name"] == name:
+            return d
+    known = ", ".join(d["name"] for d in displays) or "none"
+    raise ValueError(f"no display named {name!r} (configured: {known})")
+
+
+def rename_display(old: str, new: str) -> None:
+    """Rename a display in config.json. A legacy single-host config is converted to a
+    "displays" list first, so the name has somewhere to live."""
+    new = new.strip()
+    if not new or new == "all":
+        raise ValueError(f"{new!r} can't be used as a display name")
+    names = [d["name"] for d in load_displays()]
+    if old not in names:
+        find_display(old)  # raises with the list of known names
+    if new != old and new in names:
+        raise ValueError(f"there is already a display named {new!r}")
+    raw = _read("config.json")
+    if not isinstance(raw.get("displays"), list):
+        raw["displays"] = load_displays()
+        raw.pop("host", None)
+    for d in raw["displays"]:
+        if isinstance(d, dict) and d.get("host") and str(d.get("name") or d["host"]) == old:
+            d["name"] = new
+            break
+    save_config(raw)
 
 
 def load_config() -> dict:
     """Settings with defaults filled in; $CLOCK_HOST still wins for the host."""
     cfg = {**DEFAULTS, **_read("config.json")}
     cfg["host"] = resolve_host()
+    cfg["displays"] = load_displays()
     return cfg
 
 
@@ -90,9 +148,27 @@ def save_config(cfg: dict) -> None:
     _write("config.json", cfg)
 
 
-def load_state() -> dict:
-    return _read("state.json")
+_state_lock = threading.Lock()
 
 
-def save_state(state: dict) -> None:
-    _write("state.json", state)
+def _load_states() -> dict:
+    """Whole state.json, with pre-multi-display flat keys moved under the default host."""
+    state = _read("state.json")
+    flat = {k: state.pop(k) for k in _FLAT_STATE if k in state}
+    displays = state.setdefault("displays", {})
+    if flat:
+        displays.setdefault(resolve_host(), {}).update(flat)
+    return state
+
+
+def load_display_state(host: str) -> dict:
+    with _state_lock:
+        return dict(_load_states()["displays"].get(host, {}))
+
+
+def save_display_state(host: str, st: dict) -> None:
+    """Read-modify-write so parallel pushes to different displays don't clobber each other."""
+    with _state_lock:
+        state = _load_states()
+        state["displays"][host] = st
+        _write("state.json", state)

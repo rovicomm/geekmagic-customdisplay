@@ -23,7 +23,7 @@ ANIM_SLOT  = f"/image/{OWN_PREFIX}anim.gif"
 class Display:
     def __init__(self, device: UltraDevice):
         self.device = device
-        self.state = config.load_state()
+        self.state = config.load_display_state(device.host)
 
     def show(self, content: Image.Image | bytes, force: bool = False) -> bool:
         """Show a PIL image (sent as JPEG) or raw GIF/JPEG bytes. Returns False if
@@ -44,7 +44,7 @@ class Display:
         if self.state.get("showing") != slot or force:
             self.device.show_image(slot)
         self.state.update(showing=slot, hash=digest)
-        config.save_state(self.state)
+        config.save_display_state(self.device.host, self.state)
         return True
 
     def _take_over(self) -> None:
@@ -64,7 +64,7 @@ class Display:
         if previous is not None:
             self.device.set_theme(previous)
         self.state.pop("showing", None)
-        config.save_state(self.state)
+        config.save_display_state(self.device.host, self.state)
         return previous
 
     def clean(self) -> list[str]:
@@ -76,5 +76,5 @@ class Display:
                     self.device.delete(f.path)
                     removed.append(f.path)
         self.state.pop("showing", None)
-        config.save_state(self.state)
+        config.save_display_state(self.device.host, self.state)
         return removed

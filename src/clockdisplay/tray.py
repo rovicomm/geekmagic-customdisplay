@@ -1,14 +1,17 @@
-"""System-tray app: keeps the SmallTV showing live Claude usage.
+"""System-tray app: keeps the configured SmallTV displays showing live Claude usage.
 
 Run with `clock-tray` (pythonw, no console) or `python -m clockdisplay.tray`.
 Logs go to %LOCALAPPDATA%\\clockdisplay\\logs\\tray.log.
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
+import subprocess
 import sys
 import threading
+import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -20,8 +23,8 @@ from clockdisplay.claude.auth import AuthError
 from clockdisplay.claude.usage import RateLimited, Usage
 from clockdisplay.device import UltraDevice
 from clockdisplay.display import Display
-from clockdisplay.meter import Meter
-from clockdisplay.render import canvas, widgets
+from clockdisplay.meter import Meter, Target
+from clockdisplay.render import canvas, frames, widgets
 
 log = logging.getLogger("clockdisplay.tray")
 
@@ -29,6 +32,7 @@ APP_NAME = "ClockDisplay"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 GREY = (150, 150, 150)
 TRACK = (70, 70, 70)
+IDENTIFY_SECONDS = 6
 
 
 # --- icon ----------------------------------------------------------------------
@@ -76,6 +80,27 @@ def set_autostart(enabled: bool) -> None:
                 pass
 
 
+# --- text prompt ---------------------------------------------------------------
+
+def ask_text(title: str, prompt: str, default: str = "") -> str | None:
+    """Windows InputBox via PowerShell (keeps tkinter out of the exe). None if cancelled."""
+    def q(v: str) -> str:
+        return "'" + v.replace("'", "''") + "'"
+    # Base64 the answer: PowerShell 5.1 ignores OutputEncoding when stdout is a pipe.
+    script = ("Add-Type -AssemblyName Microsoft.VisualBasic; "
+              f"$r = [Microsoft.VisualBasic.Interaction]::InputBox({q(prompt)}, {q(title)}, {q(default)}); "
+              "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($r))")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                             capture_output=True, timeout=600,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        log.exception("text prompt failed")
+        return None
+    text = base64.b64decode(out.stdout.strip() or b"").decode("utf-8", "replace").strip()
+    return text or None  # InputBox returns "" on Cancel
+
+
 # --- single instance -----------------------------------------------------------
 
 _mutex = None
@@ -99,22 +124,44 @@ class TrayApp:
         self.meter = Meter()
         self.stop, self.wake = threading.Event(), threading.Event()
         self.error: str | None = None
-        self.icon = pystray.Icon(APP_NAME, render_icon(None), "Claude usage: starting…", self._menu())
+        self.meter.sync_targets()
+        self.icon = pystray.Icon(APP_NAME, render_icon(None), "Claude usage: starting…",
+                                 pystray.Menu(self._items))
 
-    def _menu(self) -> pystray.Menu:
+    def _items(self) -> list[pystray.MenuItem]:
+        """Rebuilt each time the menu opens, so displays added to config.json show up."""
         item = pystray.MenuItem
-        return pystray.Menu(
+        return [
             item(lambda _: self._status_line(), None, enabled=False),
             pystray.Menu.SEPARATOR,
             item("Refresh now", self._refresh, default=True),
-            item("Pause display updates", self._toggle_pause, checked=lambda _: self.meter.paused),
-            item("Restore clock theme", self._restore),
+            item("Pause all displays", self._toggle_pause, checked=lambda _: self.meter.paused),
+            item("Restore all clock themes", self._restore_all),
+            pystray.Menu.SEPARATOR,
+            *(item(t.name, self._display_menu(t.name)) for t in self.meter.targets.values()),
             pystray.Menu.SEPARATOR,
             item("Edit settings", self._edit_settings),
             item("Open data folder", lambda: os.startfile(config.config_dir())),
             item("Start with Windows", self._toggle_autostart, checked=lambda _: autostart_enabled()),
             pystray.Menu.SEPARATOR,
             item("Quit", self._quit),
+        ]
+
+    def _display_menu(self, name: str) -> pystray.Menu:
+        item = pystray.MenuItem
+
+        def target() -> Target | None:
+            return self.meter.targets.get(name)
+
+        return pystray.Menu(
+            item(lambda _: (t := target()) and f"{t.host} · {t.status}" or "removed", None, enabled=False),
+            item("Identify (show name on screen)", lambda: self._identify(name)),
+            item("Rename…", lambda: self._rename(name)),
+            pystray.Menu.SEPARATOR,
+            item("Pause updates", lambda: self._toggle_display_pause(name),
+                 checked=lambda _: bool((t := target()) and t.paused)),
+            item("Restore clock theme", lambda: self._restore(name)),
+            item("Open web UI", lambda: (t := target()) and webbrowser.open(f"http://{t.host}")),
         )
 
     def _status_line(self) -> str:
@@ -129,9 +176,14 @@ class TrayApp:
         if isinstance(result, Usage):
             self.error = None
             u = result
-            self.icon.icon = render_icon(u.five_pct, active=not self.meter.paused)
-            self.icon.title = (f"Claude 5h {u.five_pct:.0f}% (resets {u.five_reset})\n"
-                               f"7d {u.week_pct:.0f}% (resets {u.week_reset})")
+            self.icon.icon = render_icon(u.five_pct, active=self._active())
+            title = (f"Claude 5h {u.five_pct:.0f}% (resets {u.five_reset})\n"
+                     f"7d {u.week_pct:.0f}% (resets {u.week_reset})")
+            failing = sum(1 for t in self.meter.targets.values()
+                          if t.app == "claude" and not t.paused and t.error)
+            if failing:
+                title += f"\n({failing} display{'s' if failing > 1 else ''} unreachable)"
+            self.icon.title = title[:127]
         else:
             if isinstance(result, AuthError):
                 self.error = "Sign-in needed: run `claude`"
@@ -147,21 +199,95 @@ class TrayApp:
     def _refresh(self) -> None:
         self.wake.set()
 
+    def _active(self) -> bool:
+        """False when nothing is being pushed, so the icon greys out."""
+        return not self.meter.paused and any(
+            t.app == "claude" and not t.paused for t in self.meter.targets.values())
+
+    def _redraw_icon(self) -> None:
+        if self.meter.last:
+            self.icon.icon = render_icon(self.meter.last.five_pct, active=self._active())
+        self.icon.update_menu()
+
     def _toggle_pause(self) -> None:
         self.meter.paused = not self.meter.paused
-        if self.meter.last:
-            self.icon.icon = render_icon(self.meter.last.five_pct, active=not self.meter.paused)
+        self._redraw_icon()
         if not self.meter.paused:
-            self.meter.invalidate()  # re-take the display even if the numbers didn't change
+            self.meter.invalidate()  # re-take the displays even if the numbers didn't change
             self.wake.set()
 
-    def _restore(self) -> None:
-        self.meter.paused = True
+    def _toggle_display_pause(self, name: str) -> None:
+        t = self.meter.targets.get(name)
+        if not t:
+            return
+        t.paused = not t.paused
+        self._redraw_icon()
+        if not t.paused:
+            self.meter.invalidate(name)
+            self.wake.set()
+
+    def _restore_device(self, t: Target) -> None:
         try:
-            Display(UltraDevice(config.resolve_host())).restore()
+            Display(UltraDevice(t.host)).restore()
         except Exception:
-            log.exception("restore failed")
-        self.icon.update_menu()
+            log.exception("restore %s failed", t.name)
+
+    def _restore(self, name: str) -> None:
+        t = self.meter.targets.get(name)
+        if t:
+            t.paused = True
+            self._restore_device(t)
+            self._redraw_icon()
+
+    def _restore_all(self) -> None:
+        self.meter.paused = True  # "Pause all displays" unticks to resume them all
+        for t in list(self.meter.targets.values()):
+            self._restore_device(t)
+        self._redraw_icon()
+
+    def _identify(self, name: str) -> None:
+        """Show the display's name for IDENTIFY_SECONDS, then put back what it was showing."""
+        t = self.meter.targets.get(name)
+        if not t or t.hold:
+            return
+
+        def run() -> None:
+            t.hold = True
+            try:
+                Display(UltraDevice(t.host)).show(frames.identify(t.name, t.host), force=True)
+                self.stop.wait(IDENTIFY_SECONDS)
+            except Exception as e:
+                log.warning("identify %s failed: %s", t.name, e)
+                self.icon.notify(f"Couldn't reach {t.name} ({t.host})", APP_NAME)
+                return
+            finally:
+                t.hold = False
+            if t.app == "claude" and not t.paused and not self.meter.paused:
+                self.meter.invalidate(t.name)  # the meter re-pushes the usage card
+                self.wake.set()
+            else:
+                self._restore_device(t)
+
+        threading.Thread(target=run, name="identify", daemon=True).start()
+
+    def _rename(self, name: str) -> None:
+        t = self.meter.targets.get(name)
+        if not t:
+            return
+
+        def run() -> None:
+            new = ask_text("Rename display", f"Name for the display at {t.host}:", name)
+            if new is None or new.strip() in ("", name):
+                return
+            try:
+                config.rename_display(name, new)
+            except ValueError as e:
+                self.icon.notify(str(e), APP_NAME)
+                return
+            self.meter.rename(name, new.strip())
+            self.icon.update_menu()
+
+        threading.Thread(target=run, name="rename", daemon=True).start()
 
     def _edit_settings(self) -> None:
         path = config.config_file()
