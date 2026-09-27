@@ -121,23 +121,26 @@ card once the rate falls below half of `fire_rate`, or when the window resets. P
 ## Aircraft overhead (ADS-B)
 With a local ADS-B receiver running readsb, tar1090, dump1090-fa or piaware, the displays can
 show the planes flying over you. Each one gets a card with a photo (from
-[planespotters.net](https://www.planespotters.net), credited on screen), callsign, altitude with
-a climb/descent arrow, type, registration, operator, speed, and distance/direction. Point the
+[planespotters.net](https://www.planespotters.net), credited on screen), callsign, route
+(e.g. `LHR → JFK London – New York`), altitude with a climb/descent arrow, type, registration,
+operator, speed, and distance/direction. Routes come from the same crowd-sourced routeset API that
+tar1090 uses ([adsb.im](https://adsb.im)). Only airline callsigns are looked up, and routes that
+don't match the plane's position are dropped. Point the
 app at the receiver's web address, the same one that shows its map:
 ```json
 {
   "displays": [{"name": "desk", "host": "192.168.1.50", "app": "claude"}],
-  "adsb": {"url": "http://192.168.1.20:8080", "radius": 5, "popup_seconds": 30}
+  "adsb": {"url": "http://192.168.1.20:8080", "radius": 5, "popup_radius": 2, "popup_seconds": 30}
 }
 ```
-* On a **`claude`** display, a plane that comes within range **pops up** over the usage card for
-  `popup_seconds`, then the usage card comes back. The same plane won't pop up again for
+* On a **`claude`** display, a plane that comes within `popup_radius` **pops up** over the usage
+  card for `popup_seconds`, then the usage card comes back. The same plane won't pop up again for
   `cooldown` seconds. Set `"adsb_popup": false` on a display to keep pop-ups off it.
 * An **`adsb`** display shows the nearest plane in range all the time and goes back to its
   clock theme when none is in range.
 
 The tray's **Aircraft** menu shows what's overhead. From it you can switch spotting and pop-ups on
-and off, choose the pop-up length and radius, pick which fields the card shows, set the receiver
+and off, choose the pop-up length, the overhead and pop-up radii, pick which fields the card shows, set the receiver
 URL, open the receiver's map, and pop up the nearest plane now to try things out. The other
 settings live in the `adsb` block of `config.json` and are re-read every poll:
 
@@ -154,13 +157,15 @@ settings live in the `adsb` block of `config.json` and are re-read every poll:
 | `military_only` | `false` | only aircraft flagged military in the receiver's database |
 | `popup` | `true` | pop planes up over `claude` displays |
 | `popup_seconds` | `30` | how long a pop-up stays |
+| `popup_radius` | `0` | nautical miles within which a plane can interrupt a `claude` display; `0` = same as `radius` |
 | `cooldown` | `1800` | seconds before the same plane can pop up again |
 | `refresh` | `20` | seconds between card refreshes on `adsb` displays |
 | `poll_interval` | `5` | seconds between receiver polls |
-| `fields` | all but `squawk` | card contents: `photo`, `callsign`, `altitude`, `type`, `registration`, `operator`, `speed`, `distance`, `squawk` |
+| `fields` | all but `squawk` | card contents: `photo`, `callsign`, `route`, `altitude`, `type`, `registration`, `operator`, `speed`, `distance`, `squawk` |
+| `route_api` | adsb.im | tar1090-style routeset endpoint the routes come from |
 
 ```powershell
-clock planes                       # what's overhead now (--all: everything tracked)
+clock planes                       # what's overhead now, * = would pop up (--all: everything tracked)
 clock plane                        # push the nearest plane's card (or: clock plane BAW117 --out card.png)
 ```
 Photos are cached in `photos\` in the data folder: a photo is kept until there are 2000 of

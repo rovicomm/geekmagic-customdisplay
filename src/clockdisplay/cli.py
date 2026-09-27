@@ -229,15 +229,18 @@ def _spotter():
 
 
 def cmd_planes(args):
+    from clockdisplay.adsb import source
     from clockdisplay.adsb.card import altitude_text
     sp = _spotter()
     rows = sp.nearby if not args.all else sorted(
         sp.aircraft, key=lambda ac: (ac.distance is None, ac.distance or 0))
-    radius = sp.settings["radius"]
-    print(f"{len(sp.nearby)} of {len(sp.aircraft)} tracked aircraft within {radius} nm and your filters")
+    radius, popup = sp.settings["radius"], sp.popup_radius
+    print(f"{len(sp.nearby)} of {len(sp.aircraft)} tracked aircraft within {radius} nm and your filters"
+          f" (* = within the {popup:g} nm pop-up radius)")
     for ac in rows:
         dist = "" if ac.distance is None else f"{ac.distance:5.1f} nm {ac.direction:<2}"
-        print(f"  {ac.hex:<7} {ac.name:<9} {ac.type_code:<5} {altitude_text(ac):>10}  {dist:<11} "
+        mark = "*" if source.matches(ac, {**sp.settings, "radius": popup}) else " "
+        print(f"{mark} {ac.hex:<7} {ac.name:<9} {ac.type_code:<5} {altitude_text(ac):>10}  {dist:<11} "
               f"{ac.description}")
 
 
@@ -257,7 +260,9 @@ def cmd_plane(args):
         if not pool:
             raise ValueError("the receiver isn't tracking any aircraft with a position")
         ac = pool[0]
-    print(f"{ac.name} ({ac.hex}) {ac.description or ac.type_code}")
+    route = sp.routes.lookup(ac, sp.settings["route_api"])
+    print(f"{ac.name} ({ac.hex}) {ac.description or ac.type_code}"
+          + (f", {route.codes.replace(' → ', ' -> ')} ({route.cities.replace('–', '-')})" if route else ""))
     _output(args, sp.card(ac))
 
 

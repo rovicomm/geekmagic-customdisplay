@@ -41,12 +41,14 @@ ADSB_DEFAULTS = {
     "military_only": False,
     "popup": True,          # pop planes up over "claude" displays
     "popup_seconds": 30,    # how long a pop-up stays before the usage card comes back
+    "popup_radius": 0,      # nautical miles within which a plane may interrupt; 0 = same as radius
     "cooldown": 1800,       # seconds before the same aircraft can pop up again
     "refresh": 20,          # seconds between card refreshes on "adsb" displays
-    "fields": ["photo", "callsign", "type", "registration", "operator",
+    "fields": ["photo", "callsign", "route", "type", "registration", "operator",
                "altitude", "speed", "distance"],
+    "route_api": "https://adsb.im/api/0/routeset",  # tar1090's routeset format
 }
-ADSB_FIELDS = ("photo", "callsign", "type", "registration", "operator", "altitude",
+ADSB_FIELDS = ("photo", "callsign", "route", "type", "registration", "operator", "altitude",
                "speed", "distance", "squawk")
 
 APPS = ("claude", "adsb", "off")  # what a display can run; "claude" is the usage meter

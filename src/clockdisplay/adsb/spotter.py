@@ -3,8 +3,8 @@
 Works alongside the usage Meter and shares its display targets:
   * "adsb" displays show the nearest aircraft that passes the filters, refreshed every
     `refresh` seconds, and go back to the clock theme when the sky is empty;
-  * "claude" displays get a pop-up for each newly arrived aircraft that lasts
-    `popup_seconds`, then the meter re-pushes the usage card. The same aircraft doesn't
+  * "claude" displays get a pop-up for each aircraft that comes within `popup_radius`
+    (default: `radius`), lasting `popup_seconds`, then the usage card goes back up. The same aircraft doesn't
     pop up again for `cooldown` seconds. A plane that arrives while a pop-up is still
     showing gets its turn afterwards if it's still overhead.
 Settings live in the "adsb" block of config.json and are re-read every poll.
@@ -19,6 +19,7 @@ from typing import Callable
 from clockdisplay import config
 from clockdisplay.adsb import card, source
 from clockdisplay.adsb.photos import PhotoCache
+from clockdisplay.adsb.routes import RouteCache
 from clockdisplay.adsb.source import Aircraft, SourceError
 from clockdisplay.device import DeviceError
 from clockdisplay.meter import Meter, Target
@@ -31,9 +32,11 @@ MAX_BACKOFF = 300
 
 class Spotter:
     def __init__(self, meter: Meter, fetch=source.fetch_aircraft, receiver=source.fetch_receiver,
-                 photos: PhotoCache | None = None, clock: Callable[[], float] = time.time):
+                 photos: PhotoCache | None = None, routes: RouteCache | None = None,
+                 clock: Callable[[], float] = time.time):
         self.meter, self.fetch, self.fetch_receiver, self.clock = meter, fetch, receiver, clock
         self.photos = photos or PhotoCache()
+        self.routes = routes or RouteCache()
         self.settings: dict = dict(config.ADSB_DEFAULTS)
         self.aircraft: list[Aircraft] = []  # everything the receiver tracks
         self.nearby: list[Aircraft] = []    # passing the filters, nearest first
@@ -41,6 +44,10 @@ class Spotter:
         self.error: str | None = None
         self.wake = threading.Event()
         self._receiver: tuple[str, tuple[float, float] | None] | None = None
+
+    @property
+    def popup_radius(self) -> float:
+        return float(self.settings["popup_radius"] or 0) or float(self.settings["radius"])
 
     @property
     def active(self) -> bool:
@@ -71,7 +78,8 @@ class Spotter:
     def card(self, ac: Aircraft):
         fields = [f for f in self.settings["fields"] if f in config.ADSB_FIELDS]
         photo = self.photos.lookup(ac.hex) if "photo" in fields else None
-        return card.render(ac, fields, photo)
+        route = self.routes.lookup(ac, self.settings["route_api"]) if "route" in fields else None
+        return card.render(ac, fields, photo, route)
 
     def refresh(self, ignore_enabled: bool = False) -> None:
         """Re-read settings and fetch the aircraft list (no display changes)."""
@@ -120,7 +128,8 @@ class Spotter:
     def _popup(self, targets: list[Target], now: float, stop: threading.Event) -> None:
         cooldown = float(self.settings["cooldown"])
         self.popped = {h: at for h, at in self.popped.items() if now - at < cooldown}
-        fresh = [ac for ac in self.nearby if ac.hex not in self.popped]
+        candidates = source.overhead(self.aircraft, {**self.settings, "radius": self.popup_radius})
+        fresh = [ac for ac in candidates if ac.hex not in self.popped]
         ready = [t for t in targets if not t.hold]
         if not fresh or not ready:
             return  # a busy display means the plane waits for the next poll

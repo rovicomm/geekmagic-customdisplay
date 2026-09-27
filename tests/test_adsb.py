@@ -8,6 +8,7 @@ from PIL import Image
 from clockdisplay import config
 from clockdisplay.adsb import card, source
 from clockdisplay.adsb.photos import PhotoCache
+from clockdisplay.adsb.routes import Airport, Route, RouteCache, parse_route
 from clockdisplay.adsb.source import Aircraft
 from clockdisplay.adsb.spotter import Spotter
 from clockdisplay.claude.usage import Usage
@@ -183,8 +184,56 @@ def test_card_renders_240_square(fields, photo):
     ac = plane(registration="G-0DMO", type_code="A321", description="AIRBUS A-321 with a very long name",
                operator="SOME VERY LONG OPERATOR NAME LIMITED", speed=250.0, vertical_rate=-1500,
                squawk="7700")
-    img = card.render(ac, fields, Photo(Image.open(io.BytesIO(_jpeg())), "A. Spotter") if photo else None)
+    route = Route(Airport("LHR", "EGLL", "London"), Airport("", "KJFK", "New York"))
+    img = card.render(ac, fields, Photo(Image.open(io.BytesIO(_jpeg())), "A. Spotter") if photo else None,
+                      route)
     assert img.size == (240, 240) and img.mode == "RGB"
+
+
+ROUTE_ENTRY = {
+    "callsign": "BAW117", "plausible": True, "airport_codes": "EGLL-KJFK",
+    "_airports": [{"iata": "LHR", "icao": "EGLL", "location": "London"},
+                  {"iata": "JFK", "icao": "KJFK", "location": "New York"}]}
+
+
+def test_parse_route():
+    r = parse_route(ROUTE_ENTRY)
+    assert (r.codes, r.cities) == ("LHR → JFK", "London – New York")
+    assert parse_route({**ROUTE_ENTRY, "plausible": False}) is None
+    assert parse_route({"callsign": "CFAKE", "_airports": [], "airport_codes": "unknown"}) is None
+    multi = parse_route({**ROUTE_ENTRY, "_airports": ROUTE_ENTRY["_airports"] + [{"icao": "KLAX"}]})
+    assert multi.codes == "LHR → JFK → KLAX" and multi.destination.code == "KLAX"
+
+
+def test_route_cache_looks_up_airline_callsigns_once_per_ttl():
+    from clockdisplay.adsb import routes
+    calls, now = [], [0.0]
+
+    def post(url, body):
+        calls.append(body)
+        return json.dumps([{**ROUTE_ENTRY, "callsign": body["planes"][0]["callsign"]}]).encode()
+
+    rc = RouteCache(post, clock=lambda: now[0])
+    ac = plane(callsign="BAW117", lat=HOME[0], lon=HOME[1])
+    assert rc.lookup(ac).codes == "LHR → JFK" and rc.lookup(ac).codes == "LHR → JFK"
+    assert calls == [{"planes": [{"callsign": "BAW117", "lat": HOME[0], "lng": HOME[1]}]}]
+    assert rc.lookup(plane(callsign="CFAKE", lat=HOME[0], lon=HOME[1])) is None  # GA: not looked up
+    assert rc.lookup(plane(callsign="BAW1")) is None                        # no position
+    now[0] = routes.CACHE_TTL + 1
+    rc.lookup(ac)
+    assert len(calls) == 2
+
+
+def test_route_cache_does_not_cache_failures():
+    calls = []
+
+    def post(url, body):
+        calls.append(url)
+        raise OSError("offline")
+
+    rc = RouteCache(post)
+    ac = plane(callsign="BAW117", lat=HOME[0], lon=HOME[1])
+    assert rc.lookup(ac) is None and rc.lookup(ac) is None and len(calls) == 2
 
 
 def test_altitude_text():
@@ -209,7 +258,7 @@ class FakeDisplay:
 
 
 class NoPhotos:
-    def lookup(self, hex_code):
+    def lookup(self, *args):
         return None
 
 
@@ -225,7 +274,7 @@ def make_spotter(sky, displays, down=(), **adsb):
     log, now = [], [0.0]
     meter = Meter(display_factory=lambda h: FakeDisplay(log, h, fail=h in down), clock=lambda: now[0])
     sp = Spotter(meter, fetch=lambda url, loc: list(sky), receiver=lambda url: None,
-                 photos=NoPhotos(), clock=lambda: now[0])
+                 photos=NoPhotos(), routes=NoPhotos(), clock=lambda: now[0])
     return sp, log, now
 
 
@@ -266,6 +315,16 @@ def test_popup_waits_for_held_display_and_takes_planes_in_turn():
     sp.tick(stop); _join_popups()
     sp.tick(stop); _join_popups()
     assert log == [("show", "h1"), ("restore", "h1")] * 2 and set(sp.popped) == {"aaa111", "bbb222"}
+
+
+@pytest.mark.parametrize("popup_radius,expected", [(0, ["near", "mid"]), (2, ["near"]), (8, ["near", "mid", "far"])])
+def test_popup_radius_limits_what_interrupts(popup_radius, expected):
+    sky = [plane("near", 1.0), plane("mid", 4.0), plane("far", 7.0)]
+    sp, log, _ = make_spotter(sky, [{"name": "desk", "host": "h1"}], radius=5, popup_radius=popup_radius)
+    for _ in range(4):
+        sp.tick(threading.Event()); _join_popups()
+    assert sorted(sp.popped) == sorted(expected)
+    assert [ac.hex for ac in sp.nearby] == ["near", "mid"]  # "overhead" still means radius
 
 
 def test_popup_respects_pause_and_popup_setting():

@@ -38,7 +38,7 @@ TRACK = (70, 70, 70)
 IDENTIFY_SECONDS = 6
 POPUP_CHOICES = (10, 20, 30, 45, 60, 120)  # seconds
 RADIUS_CHOICES = (1, 2, 3, 5, 10, 25)      # nautical miles
-FIELD_LABELS = {"photo": "Photo", "callsign": "Callsign", "altitude": "Altitude",
+FIELD_LABELS = {"photo": "Photo", "callsign": "Callsign", "route": "Route (airports)", "altitude": "Altitude",
                 "type": "Aircraft type", "registration": "Registration", "operator": "Operator",
                 "speed": "Speed", "distance": "Distance and direction", "squawk": "Squawk"}
 
@@ -208,6 +208,12 @@ class TrayApp:
                 item(f"{r} nm", choose("radius", r), radio=True,
                      checked=lambda _, r=r: float(setting("radius")) == r)
                 for r in RADIUS_CHOICES))),
+            item("Pop-up radius", pystray.Menu(
+                item("Same as overhead radius", choose("popup_radius", 0), radio=True,
+                     checked=lambda _: not setting("popup_radius")),
+                *(item(f"{r} nm", choose("popup_radius", r), radio=True,
+                       checked=lambda _, r=r: float(setting("popup_radius") or 0) == r)
+                  for r in RADIUS_CHOICES))),
             item("Card shows", pystray.Menu(*(
                 item(label, toggle_field(name), checked=lambda _, n=name: n in setting("fields"))
                 for name, label in FIELD_LABELS.items()))),
