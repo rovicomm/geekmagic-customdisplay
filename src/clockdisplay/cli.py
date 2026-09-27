@@ -8,11 +8,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+import urllib.error
 from pathlib import Path
 
 from PIL import Image
 
 from clockdisplay import config
+from clockdisplay.claude import auth
+from clockdisplay.claude.auth import AuthError
+from clockdisplay.claude.usage import RateLimited, fetch_usage
 from clockdisplay.device import THEMES, DeviceError, UltraDevice
 from clockdisplay.display import Display
 from clockdisplay.render import anim, frames
@@ -116,6 +121,39 @@ def cmd_clean(args):
     print("\n".join(f"deleted {p}" for p in removed) or "no cm_* files on device")
 
 
+# --- Claude usage ------------------------------------------------------------
+
+def cmd_usage(args):
+    u = fetch_usage()
+    print(f"5h session {u.five_pct:5.1f}%  resets {u.five_reset}")
+    print(f"7d weekly  {u.week_pct:5.1f}%  resets {u.week_reset}")
+    if not args.no_push:
+        _output(args, frames.dual_meter(u.five_pct, u.five_reset, u.week_pct, u.week_reset))
+
+
+def cmd_auth(args):
+    if args.logout:
+        auth.invalidate()
+        print("cleared cached token from the credential store")
+        return
+    s = auth.status()
+    print(f"credentials: {auth.credentials_path()}")
+    print(f"     source: {s['source']}")
+    if s["expires_in"] is not None:
+        h, m = divmod(s["expires_in"] // 60, 60)
+        print(f" expires in: {h}h {m}m")
+
+
+def cmd_watch(args):
+    import logging
+    from clockdisplay.meter import Meter
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    try:
+        Meter().run(threading.Event())
+    except KeyboardInterrupt:
+        pass
+
+
 # --- render commands ---------------------------------------------------------
 
 def cmd_text(args):
@@ -207,6 +245,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("restore", help="switch back to the theme active before we took over").set_defaults(fn=cmd_restore)
     sub.add_parser("clean", help="delete our cm_* files from the device").set_defaults(fn=cmd_clean)
 
+    sp = render_cmd("usage", cmd_usage, "fetch live Claude usage (5h / 7d) and show it")
+    sp.add_argument("--no-push", action="store_true", help="just print the numbers")
+
+    sp = sub.add_parser("auth", help="show where the Claude token comes from")
+    sp.add_argument("--logout", action="store_true", help="clear the cached token")
+    sp.set_defaults(fn=cmd_auth)
+
+    sub.add_parser("watch", help="keep the display updated with live usage (Ctrl+C to stop)").set_defaults(fn=cmd_watch)
+
     sp = render_cmd("text", cmd_text, "full-screen auto-sized text ('\\n' for new lines)")
     sp.add_argument("message")
     sp.add_argument("--fg", default="#ebebeb")
@@ -252,6 +299,7 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     try:
         args.fn(args)
-    except (DeviceError, PermissionError, ValueError, OSError) as e:
+    except (DeviceError, AuthError, RateLimited, urllib.error.URLError,
+            PermissionError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
