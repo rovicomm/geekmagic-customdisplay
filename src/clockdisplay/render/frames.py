@@ -41,22 +41,28 @@ def meter(pct: float, label: str = "", sub: str = "", fill: str | Color | None =
 
 
 def dual_meter(five_pct: float, five_reset: str, week_pct: float, week_reset: str,
-               title: str = "Claude usage") -> Image.Image:
-    """Two-bar usage card (layout from claude-meter's photo240 renderer)."""
+               title: str = "Claude usage", fire_phase: float | None = None) -> Image.Image:
+    """Two-bar usage card (layout from claude-meter's photo240 renderer).
+
+    With `fire_phase` (radians) the 5h bar is on fire; see anim.dual_meter_fire."""
     img = canvas.new()
     draw = ImageDraw.Draw(img)
     f_title, f_pct, f_small = canvas.font(20), canvas.font(34), canvas.font(14, "regular")
     draw.text((12, 8), title, font=f_title, fill=CLAUDE)
 
-    def section(y: int, label: str, pct: float, reset: str) -> None:
+    def section(y: int, label: str, pct: float, reset: str, fire: bool = False) -> None:
         c = level_color(pct)
+        if fire:  # drawn first so the label and percentage sit in front of the flames
+            filled = int(216 * max(0.0, min(pct, 100.0)) / 100)
+            widgets.flames(img, (12, y + 8, 12 + max(filled, 24), y + 42), fire_phase)
+            c = widgets.FIRE[1]
         draw.text((12, y), label, font=f_small, fill=DIM)
         pct_text = f"{max(0.0, pct):.0f}%"
         draw.text((228 - f_pct.getlength(pct_text), y - 4), pct_text, font=f_pct, fill=c)
         widgets.bar(img, (12, y + 38, 228, y + 52), pct, c, radius=4)
         draw.text((12, y + 56), f"resets {reset}", font=f_small, fill=DIM)
 
-    section(48, "5h session", five_pct, five_reset)
+    section(48, "5h session", five_pct, five_reset, fire=fire_phase is not None)
     section(142, "7d weekly", week_pct, week_reset)
     return img
 

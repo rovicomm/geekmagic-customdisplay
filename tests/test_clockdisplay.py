@@ -48,7 +48,9 @@ def test_frames_are_240_square_jpegs(img):
 
 
 @pytest.mark.parametrize("make", [lambda: anim.scroll("Hi"), lambda: anim.fill(50),
-                                  lambda: anim.blink("!")], ids=["scroll", "fill", "blink"])
+                                  lambda: anim.blink("!"),
+                                  lambda: anim.dual_meter_fire(42, "in 2h", 76, "Mon")],
+                         ids=["scroll", "fill", "blink", "fire"])
 def test_animations_are_240_square_gifs(make):
     data = make()
     assert data[:3] == b"GIF" and len(data) < MAX_UPLOAD

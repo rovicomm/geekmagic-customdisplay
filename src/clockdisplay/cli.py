@@ -177,7 +177,8 @@ def cmd_meter(args):
 
 
 def cmd_demo(args):
-    _output(args, frames.dual_meter(args.five, args.five_reset, args.week, args.week_reset))
+    make = anim.dual_meter_fire if args.fire else frames.dual_meter
+    _output(args, make(args.five, args.five_reset, args.week, args.week_reset))
 
 
 def cmd_pattern(args):
@@ -282,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--five-reset", default="in 2h 15m")
     sp.add_argument("--week", type=float, default=76)
     sp.add_argument("--week-reset", default="Mon 9:00 AM")
+    sp.add_argument("--fire", action="store_true", help="5h line on fire (heavy burn animation)")
 
     render_cmd("pattern", cmd_pattern, "colour/geometry test pattern")
 
