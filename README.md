@@ -1,4 +1,4 @@
-# clock-display
+# geekmagic-customdisplay
 
 Drive a GeekMagic **SmallTV-Ultra** (240×240) over the LAN: push rendered frames, animated
 GIFs and device settings. This is the groundwork for a Claude usage meter. The device API is
