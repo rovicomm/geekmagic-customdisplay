@@ -20,6 +20,15 @@ def text(msg: str, fg: str | Color = TEXT, bg: str | Color = BG, style: str = "b
     return img
 
 
+def identify(name: str, host: str) -> Image.Image:
+    """Display name in big type with its host underneath, framed so it reads as a label."""
+    img = canvas.new()
+    ImageDraw.Draw(img).rounded_rectangle((6, 6, SIZE - 7, SIZE - 7), radius=18, outline=CLAUDE, width=4)
+    widgets.text_box(img, name, (24, 50, SIZE - 24, 160), fill=TEXT)
+    widgets.text_box(img, host, (24, 172, SIZE - 24, 196), fill=DIM, style="regular", size=18)
+    return img
+
+
 def image(path: str, mode: str = "cover", bg: str | Color = BG) -> Image.Image:
     img = canvas.new(bg)
     with Image.open(path) as src:

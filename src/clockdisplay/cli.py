@@ -2,6 +2,7 @@
 
 Rendering commands (text, color, image, meter, demo, pattern, anim, gif) push to the
 device, or with --out save the render locally instead (PNG for stills, GIF for animations).
+The target is --host, else --display NAME (or "all"), else the first configured display.
 """
 from __future__ import annotations
 
@@ -33,12 +34,45 @@ def _output(args, content: Image.Image | bytes) -> None:
             out.write_bytes(content)
         print(f"saved {out}")
         return
-    pushed = Display(_device(args)).show(content, force=args.force)
-    print("pushed" if pushed else "unchanged, skipped (use --force)")
+    _for_each(args, lambda dev: "pushed" if Display(dev).show(content, force=args.force)
+              else "unchanged, skipped (use --force)")
+
+
+def _devices(args) -> list[tuple[str, UltraDevice]]:
+    """(name, device) pairs selected by --host / --display; defaults to the first display."""
+    if args.host:
+        return [(args.host, UltraDevice(args.host))]
+    if args.display == "all":
+        return [(d["name"], UltraDevice(d["host"])) for d in config.load_displays()]
+    if args.display:
+        d = config.find_display(args.display)
+        return [(d["name"], UltraDevice(d["host"]))]
+    host = config.resolve_host()
+    return [(host, UltraDevice(host))]
+
+
+def _for_each(args, fn) -> None:
+    """Run fn(device) -> message on every selected display. With several displays, output is
+    prefixed with the name and one failing display doesn't stop the rest (exit status 1)."""
+    devices = _devices(args)
+    if len(devices) == 1:
+        print(fn(devices[0][1]))
+        return
+    failed = False
+    for name, dev in devices:
+        try:
+            print(f"{name}: {fn(dev)}")
+        except (DeviceError, urllib.error.URLError, OSError) as e:
+            print(f"{name}: error: {e}", file=sys.stderr)
+            failed = True
+    if failed:
+        sys.exit(1)
 
 
 def _device(args) -> UltraDevice:
-    return UltraDevice(config.resolve_host(args.host))
+    if args.display == "all" and not args.host:
+        raise ValueError("this command takes a single display, not --display all")
+    return _devices(args)[0][1]
 
 
 def _on_off(value: str) -> bool:
@@ -50,6 +84,11 @@ def _on_off(value: str) -> bool:
 
 
 # --- device commands ---------------------------------------------------------
+
+def cmd_rename(args):
+    config.rename_display(args.old, args.new)
+    print(f"renamed {args.old} -> {args.new.strip()}")
+
 
 def cmd_info(args):
     info = _device(args).info()
@@ -112,13 +151,27 @@ def cmd_files(args):
 
 
 def cmd_restore(args):
-    previous = Display(_device(args)).restore()
-    print(f"restored theme {previous}" if previous else "nothing to restore")
+    def restore(dev):
+        previous = Display(dev).restore()
+        return f"restored theme {previous}" if previous else "nothing to restore"
+    _for_each(args, restore)
 
 
 def cmd_clean(args):
-    removed = Display(_device(args)).clean()
-    print("\n".join(f"deleted {p}" for p in removed) or "no cm_* files on device")
+    def clean(dev):
+        removed = Display(dev).clean()
+        return ", ".join(f"deleted {p}" for p in removed) or "no cm_* files on device"
+    _for_each(args, clean)
+
+
+def cmd_displays(args):
+    for d in config.load_displays():
+        try:
+            info = UltraDevice(d["host"], timeout=3).info()
+            status = f'{info["model"]} {info["version"]}, theme {info["theme"]} ({THEMES.get(info["theme"], "?")})'
+        except (DeviceError, OSError) as e:
+            status = f"unreachable ({e})" if args.verbose else "unreachable"
+        print(f'{d["name"]:<12} {d["host"]:<16} {d["app"]:<8} {status}')
 
 
 # --- Claude usage ------------------------------------------------------------
@@ -197,7 +250,9 @@ def cmd_anim(args):
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="clock", description="Control a SmallTV-Ultra display.")
-    p.add_argument("--host", help=f"device IP/hostname (default $CLOCK_HOST or {config.DEFAULT_HOST})")
+    p.add_argument("--host", help="device IP/hostname (default $CLOCK_HOST or the first configured display)")
+    p.add_argument("-d", "--display", metavar="NAME",
+                   help="configured display to target by name, or 'all' (see `clock displays`)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def render_cmd(name, fn, help):
@@ -206,6 +261,15 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--force", action="store_true", help="push even if unchanged")
         sp.set_defaults(fn=fn)
         return sp
+
+    sp = sub.add_parser("displays", help="list configured displays and whether they respond")
+    sp.add_argument("-v", "--verbose", action="store_true", help="show why a display is unreachable")
+    sp.set_defaults(fn=cmd_displays)
+
+    sp = sub.add_parser("rename", help="rename a configured display, e.g. 'rename display desk'")
+    sp.add_argument("old")
+    sp.add_argument("new")
+    sp.set_defaults(fn=cmd_rename)
 
     sub.add_parser("info", help="model, firmware, theme, brightness, storage").set_defaults(fn=cmd_info)
 

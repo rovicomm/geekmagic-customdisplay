@@ -14,11 +14,30 @@ The idea comes from [claude-meter](https://github.com/shavindraSN/claude-meter) 
 python -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
 ```
-Default host is `192.0.2.10`. Override it with `--host`, `$env:CLOCK_HOST`, or
-`config.json` in `%LOCALAPPDATA%\clockdisplay` (`{"host": "..."}`; `~/.config/clockdisplay` off Windows).
+Displays are listed in `config.json` in `%LOCALAPPDATA%\clockdisplay` (`~/.config/clockdisplay`
+off Windows):
+```json
+{
+  "displays": [
+    {"name": "desk",  "host": "192.168.1.50", "app": "claude"},
+    {"name": "shelf", "host": "192.168.1.51", "app": "off"}
+  ]
+}
+```
+`app` says what the display runs: `claude` (the usage meter, the default) or `off` (leave it
+alone). An older config with a single `"host"` still works and counts as one display.
+Give each display a name you'll recognise. Use **Rename…** in the tray, `clock rename display desk`,
+or the file itself. **Identify** in the tray shows the name and IP on that screen for a few
+seconds, so you can tell which physical display is which.
+
+The CLI targets the first display by default. Use `-d NAME` for another display, `-d all` for every
+display (render commands, `restore`, `clean`), or `--host IP` / `$env:CLOCK_HOST` for an
+unconfigured one. Without any config the host defaults to `192.0.2.10`.
 
 ## CLI
 ```powershell
+clock displays                     # configured displays, their app, and whether they respond
+clock rename display desk          # rename a configured display
 clock info                         # model, firmware, theme, brightness, free space
 clock theme                        # list themes (* = active); `clock theme 1` to switch
 clock brightness 40
@@ -38,6 +57,7 @@ clock anim scroll "Claude Code"    # also: anim fill 64, anim blink "!"
 clock restore                      # go back to the theme active before we took over
 clock files                        # list device files (* = ours)
 clock clean                        # delete only our cm_* files
+clock -d all demo                  # push to every configured display; -d shelf for one
 ```
 Add `--out file.png` (or `.gif` for animations) to any render command to preview it locally
 without touching the device.
@@ -49,7 +69,7 @@ install Claude Code and run `claude` once to sign in first.
 ```powershell
 clock auth                         # where the token comes from and when it expires
 clock usage                        # fetch once, print and push the usage card (--no-push, --out)
-clock watch                        # keep the display updated in the foreground
+clock watch                        # keep every `claude` display updated in the foreground
 ```
 Tokens: the credentials in `%USERPROFILE%\.claude\.credentials.json` are the source of truth.
 A cached copy lives in **Windows Credential Manager** (`clockdisplay` / `claude-oauth`). When a
@@ -60,9 +80,13 @@ the `claude` CLI stays signed in. `clock auth --logout` clears the cached copy.
 ```powershell
 .venv\Scripts\clock-tray.exe       # or: pythonw -m clockdisplay.tray
 ```
-The icon shows the 5h % and the tooltip shows both windows with their reset times. The menu has
-Refresh now, Pause display updates, Restore clock theme, Edit settings, Open data folder,
-**Start with Windows** (an HKCU `Run` entry) and Quit. Only one instance runs at a time.
+The icon shows the 5h % and the tooltip shows both windows with their reset times, plus how many
+displays are unreachable. Usage is fetched once per poll and pushed to every `claude` display in
+parallel, so one display that is offline doesn't hold up the others. The menu has Refresh now,
+Pause all displays, Restore all clock themes, a submenu for each display (status, Identify, Rename…,
+Pause updates, Restore clock theme, Open web UI), Edit settings, Open data folder, **Start with Windows** (an
+HKCU `Run` entry) and Quit. Displays added to or removed from `config.json` show up on the next
+poll. Only one instance runs at a time.
 
 ### Portable exe
 ```powershell
@@ -80,7 +104,8 @@ Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json` and `lo
 
 | key | default | |
 | --- | --- | --- |
-| `host` | `192.0.2.10` | display IP |
+| `displays` | one entry from `host` | list of `{name, host, app}`; see Setup |
+| `host` | `192.0.2.10` | legacy single-display IP, used when `displays` is absent |
 | `poll_interval` | `60` | seconds between fetches; below ~30 s triggers rate limiting |
 | `force_push` | `600` | re-push unchanged numbers so the countdowns stay fresh |
 | `autopush` | `true` | `false` = tray only, leave the display alone |
@@ -95,7 +120,7 @@ card once the rate falls below half of `fire_rate`, or when the window resets. P
 
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous
-theme for `clock restore`. Stills overwrite `/image/cm_main.jpg`, animations `/image/cm_anim.gif`.
+theme for `clock restore`. This state is kept per display, keyed by host, in `state.json`. Stills overwrite `/image/cm_main.jpg`, animations `/image/cm_anim.gif`.
 Overwriting the on-screen file refreshes it without re-selecting it. Identical content is
 skipped (`--force` to override) to save flash writes. The tool never deletes files it didn't
 create.

@@ -1,4 +1,5 @@
 import io
+import json
 
 import pytest
 from PIL import Image
@@ -67,8 +68,8 @@ def test_gif_from_file_refits(tmp_path):
 
 
 class FakeDevice:
-    def __init__(self, theme=1):
-        self._theme, self.calls = theme, []
+    def __init__(self, theme=1, host="10.0.0.5"):
+        self._theme, self.calls, self.host = theme, [], host
 
     def theme(self):
         return self._theme
@@ -115,4 +116,64 @@ def test_display_takes_over_dedups_and_restores():
     assert dev.calls == [("upload", ANIM_SLOT), ("show", ANIM_SLOT)]
 
     assert Display(dev).restore() == 1 and dev.theme() == 1
-    assert "previous_theme" not in config.load_state()
+    assert "previous_theme" not in config.load_display_state(dev.host)
+
+
+def test_display_state_is_per_host():
+    a, b = FakeDevice(theme=1, host="10.0.0.5"), FakeDevice(theme=4, host="10.0.0.6")
+    img = frames.solid("red")
+    assert Display(a).show(img) and Display(b).show(img)  # same content, different displays
+    assert config.load_display_state("10.0.0.5")["previous_theme"] == 1
+    assert config.load_display_state("10.0.0.6")["previous_theme"] == 4
+
+
+def test_flat_state_migrates_to_default_host():
+    config.save_config({"host": "10.0.0.7"})
+    (config.config_dir() / "state.json").write_text('{"previous_theme": 5, "showing": "x", "hash": "h"}')
+    assert config.load_display_state("10.0.0.7") == {"previous_theme": 5, "showing": "x", "hash": "h"}
+    assert config.load_display_state("10.0.0.8") == {}
+
+
+def test_load_displays_legacy_and_normalised(monkeypatch):
+    monkeypatch.delenv("CLOCK_HOST", raising=False)
+    config.save_config({"host": "10.0.0.7"})
+    assert config.load_displays() == [{"name": "display", "host": "10.0.0.7", "app": "claude"}]
+
+    config.save_config({"host": "10.0.0.7", "displays": [
+        {"host": "10.0.0.8"},
+        {"name": "desk", "host": "10.0.0.9", "app": "off"},
+        {"name": "nohost"},
+        {"name": "desk", "host": "10.0.0.10"},  # duplicate name: ignored
+    ]})
+    assert config.load_displays() == [
+        {"name": "10.0.0.8", "host": "10.0.0.8", "app": "claude"},
+        {"name": "desk", "host": "10.0.0.9", "app": "off"},
+    ]
+    assert config.resolve_host() == "10.0.0.8"
+    assert config.find_display("desk")["host"] == "10.0.0.9"
+    with pytest.raises(ValueError, match="desk"):
+        config.find_display("nope")
+
+
+def test_rename_display_converts_legacy_config(monkeypatch):
+    monkeypatch.delenv("CLOCK_HOST", raising=False)
+    config.save_config({"host": "10.0.0.7", "poll_interval": 90})
+    config.rename_display("display", " desk ")
+    raw = json.loads(config.config_file().read_text())
+    assert raw["displays"] == [{"name": "desk", "host": "10.0.0.7", "app": "claude"}]
+    assert "host" not in raw and raw["poll_interval"] == 90
+    assert config.resolve_host() == "10.0.0.7"
+
+
+def test_rename_display_rejects_bad_names():
+    config.save_config({"displays": [{"name": "a", "host": "h1"}, {"host": "h2"}]})
+    config.rename_display("h2", "b")  # unnamed entries are addressed by host
+    assert [d["name"] for d in config.load_displays()] == ["a", "b"]
+    for old, new in [("a", "b"), ("a", "  "), ("a", "all"), ("zzz", "c")]:
+        with pytest.raises(ValueError):
+            config.rename_display(old, new)
+
+
+def test_identify_frame():
+    img = frames.identify("desk", "192.168.1.50")
+    assert img.size == (240, 240)
