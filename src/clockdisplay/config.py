@@ -40,7 +40,8 @@ ADSB_DEFAULTS = {
     "callsigns": [],        # callsign prefixes to show, e.g. ["BAW", "DAL"]; [] = all
     "military_only": False,
     "popup": True,          # pop planes up over "claude" displays
-    "popup_seconds": 30,    # how long a pop-up stays before the usage card comes back
+    "popup_seconds": 30,    # how long a pop-up stays; 0 = until the plane leaves popup_radius
+    "popup_max": 600,       # seconds cap on an until-it-leaves pop-up (circling traffic)
     "popup_radius": 0,      # nautical miles within which a plane may interrupt; 0 = same as radius
     "cooldown": 1800,       # seconds before the same aircraft can pop up again
     "refresh": 20,          # seconds between card refreshes on "adsb" displays

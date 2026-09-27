@@ -270,7 +270,7 @@ def _join_popups():
 
 def make_spotter(sky, displays, down=(), **adsb):
     config.save_config({"displays": displays,
-                        "adsb": {"url": "http://rx", "location": list(HOME), "popup_seconds": 0, **adsb}})
+                        "adsb": {"url": "http://rx", "location": list(HOME), "popup_seconds": 0.01, **adsb}})
     log, now = [], [0.0]
     meter = Meter(display_factory=lambda h: FakeDisplay(log, h, fail=h in down), clock=lambda: now[0])
     sp = Spotter(meter, fetch=lambda url, loc: list(sky), receiver=lambda url: None,
@@ -325,6 +325,74 @@ def test_popup_radius_limits_what_interrupts(popup_radius, expected):
         sp.tick(threading.Event()); _join_popups()
     assert sorted(sp.popped) == sorted(expected)
     assert [ac.hex for ac in sp.nearby] == ["near", "mid"]  # "overhead" still means radius
+
+
+def test_until_gone_popup_holds_while_in_range_then_clears():
+    sky = [plane("aaa111", 3.0)]
+    sp, log, now = make_spotter(sky, [{"name": "desk", "host": "h1"}],
+                                radius=5, popup_seconds=0, refresh=20)
+    sp.meter.last = Usage(40, None, 10, None)
+    stop = threading.Event()
+    sp.tick(stop)
+    t = sp.meter.targets["desk"]
+    assert log == [("show", "h1")] and t.hold and "desk" in sp.popups
+    sky[0] = plane("aaa111", 1.0)
+    now[0] = 10; sp.tick(stop)                  # still overhead, not yet time to refresh
+    now[0] = 25; sp.tick(stop)                  # refresh: updated card
+    assert log == [("show", "h1")] * 2 and t.hold
+    sky.append(plane("bbb222", 4.0))            # arrives mid pop-up: waits its turn
+    now[0] = 28; sp.tick(stop)
+    assert "bbb222" not in sp.popped
+    sky[0] = plane("aaa111", 5.5)               # first plane leaves the radius:
+    now[0] = 30; sp.tick(stop)                  # straight on to the next, no usage card between
+    assert log == [("show", "h1")] * 3 and sp.popups["desk"].hex == "bbb222" and t.hold
+    assert t.pushed_key is None
+    sky[:] = [plane("bbb222", 6.0)]             # it leaves too: usage card back
+    now[0] = 40; sp.tick(stop)
+    assert log == [("show", "h1")] * 4 and not t.hold and t.pushed_key == (40, 10, False)
+
+
+def test_until_gone_popup_clears_when_lost_or_capped():
+    sky = [plane("aaa111", 2.0)]
+    sp, log, now = make_spotter(sky, [{"name": "desk", "host": "h1"}], popup_seconds=0, popup_max=600)
+    stop = threading.Event()
+    sp.tick(stop)
+    sky.clear()                                 # receiver lost it
+    now[0] = 5; sp.tick(stop)
+    assert not sp.meter.targets["desk"].hold and log[-1] == ("restore", "h1")  # no usage yet: clock
+    sky.append(plane("ccc333", 2.0))            # a circler that never leaves
+    now[0] = 10; sp.tick(stop)
+    assert sp.meter.targets["desk"].hold
+    now[0] = 609; sp.tick(stop)
+    assert sp.meter.targets["desk"].hold
+    now[0] = 611; sp.tick(stop)
+    assert not sp.meter.targets["desk"].hold and sp.popups == {}
+
+
+def test_until_gone_popup_released_when_receiver_fails_or_on_stop():
+    sky = [plane("aaa111", 2.0)]
+    sp, log, _ = make_spotter(sky, [{"name": "desk", "host": "h1"}], popup_seconds=0)
+    sp.tick(threading.Event())
+    assert sp.meter.targets["desk"].hold
+    stop = threading.Event()
+
+    def down(url, loc):
+        stop.set()
+        sp.wake.set()  # as the tray does on quit
+        raise source.SourceError("offline")
+
+    sp.fetch = down
+    sp.run(stop)
+    assert not sp.meter.targets["desk"].hold and sp.popups == {} and sp.error == "Receiver unreachable"
+
+
+def test_show_nearest_in_until_gone_mode_uses_a_fixed_time(monkeypatch):
+    from clockdisplay.adsb import spotter
+    sp, _, _ = make_spotter([plane()], [{"name": "desk", "host": "h1"}], popup_seconds=0)
+    seen = []
+    monkeypatch.setattr(sp, "flash", lambda targets, content, seconds, stop: seen.append(seconds))
+    sp.show_nearest(threading.Event())
+    assert seen == [spotter.TRY_SECONDS]
 
 
 def test_popup_respects_pause_and_popup_setting():

@@ -134,7 +134,10 @@ app at the receiver's web address, the same one that shows its map:
 }
 ```
 * On a **`claude`** display, a plane that comes within `popup_radius` **pops up** over the usage
-  card for `popup_seconds`, then the usage card comes back. The same plane won't pop up again for
+  card for `popup_seconds`, then the usage card comes back. With `popup_seconds` set to `0`
+  ("Until the plane leaves" in the tray), the pop-up stays until the plane flies back out of
+  `popup_radius`, updating as it goes. It moves straight on to the next plane if one is waiting,
+  and gives up after `popup_max` seconds for planes circling nearby. The same plane won't pop up again for
   `cooldown` seconds. Set `"adsb_popup": false` on a display to keep pop-ups off it.
 * An **`adsb`** display shows the nearest plane in range all the time and goes back to its
   clock theme when none is in range.
@@ -156,7 +159,8 @@ settings live in the `adsb` block of `config.json` and are re-read every poll:
 | `callsigns` | `[]` | only these callsign prefixes, e.g. `["BAW", "DAL"]` |
 | `military_only` | `false` | only aircraft flagged military in the receiver's database |
 | `popup` | `true` | pop planes up over `claude` displays |
-| `popup_seconds` | `30` | how long a pop-up stays |
+| `popup_seconds` | `30` | how long a pop-up stays; `0` = until the plane leaves `popup_radius` |
+| `popup_max` | `600` | longest an until-it-leaves pop-up can stay, in seconds |
 | `popup_radius` | `0` | nautical miles within which a plane can interrupt a `claude` display; `0` = same as `radius` |
 | `cooldown` | `1800` | seconds before the same plane can pop up again |
 | `refresh` | `20` | seconds between card refreshes on `adsb` displays |

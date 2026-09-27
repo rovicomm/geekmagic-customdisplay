@@ -153,19 +153,33 @@ class Meter:
         self._push_all(targets, self.render(usage), force)
 
     def flash(self, t: Target, content, seconds: float, stop: threading.Event) -> None:
-        """Show `content` on one display for `seconds` (blocking), then hand the display
-        back: the last usage card goes straight back up (no waiting for a fetch, which may be
-        rate limited), or the clock theme is restored for other displays (an "adsb" display
-        then shows its next plane). Raises if the display can't be reached. No-op if it's
-        already held."""
-        if t.hold:
+        """hold() for `seconds` (blocking), then release(). Raises if the display can't be
+        reached. No-op if it's already held."""
+        if not self.hold(t, content):
             return
+        try:
+            stop.wait(seconds)
+        finally:
+            self.release(t)
+
+    def hold(self, t: Target, content) -> bool:
+        """Put `content` on a display and keep the meter off it until release(). False if
+        something else already holds it. Raises (and doesn't hold) if it can't be reached."""
+        if t.hold:
+            return False
         t.hold = True
         try:
             self.display_factory(t.host).show(content, force=True)
-            stop.wait(seconds)
-        finally:
+        except BaseException:
             t.hold = False
+            raise
+        return True
+
+    def release(self, t: Target) -> None:
+        """Hand a held display back: the last usage card goes straight back up (no waiting
+        for a fetch, which may be rate limited), or the clock theme is restored for other
+        displays (an "adsb" display then shows its next plane)."""
+        t.hold = False
         self.invalidate(t.name)
         if t.app == "claude" and not t.paused and not self.paused:
             if self.last is not None:

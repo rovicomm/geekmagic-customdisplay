@@ -200,10 +200,12 @@ class TrayApp:
                  checked=lambda _: bool(setting("popup"))),
             item("Show nearest now", self._show_nearest, enabled=lambda _: sp.active),
             pystray.Menu.SEPARATOR,
-            item("Pop-up length", pystray.Menu(*(
-                item(f"{s} seconds", choose("popup_seconds", s), radio=True,
-                     checked=lambda _, s=s: float(setting("popup_seconds")) == s)
-                for s in POPUP_CHOICES))),
+            item("Pop-up length", pystray.Menu(
+                item("Until the plane leaves the pop-up radius", choose("popup_seconds", 0), radio=True,
+                     checked=lambda _: not setting("popup_seconds")),
+                *(item(f"{s} seconds", choose("popup_seconds", s), radio=True,
+                       checked=lambda _, s=s: float(setting("popup_seconds") or 0) == s)
+                  for s in POPUP_CHOICES))),
             item("Overhead radius", pystray.Menu(*(
                 item(f"{r} nm", choose("radius", r), radio=True,
                      checked=lambda _, r=r: float(setting("radius")) == r)
