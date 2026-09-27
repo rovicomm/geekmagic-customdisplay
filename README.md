@@ -26,7 +26,7 @@ clock color orange
 clock image photo.jpg --mode contain
 clock gif party.gif
 clock meter 83 --label "5h session" --sub "resets in 1h 4m"
-clock demo --five 42 --week 76     # mock Claude usage card
+clock demo --five 42 --week 76     # mock Claude usage card (--fire: heavy-burn animation)
 clock pattern                      # colour/geometry test pattern
 clock anim scroll "Claude Code"    # also: anim fill 64, anim blink "!"
 
@@ -79,6 +79,13 @@ Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json` and `lo
 | `poll_interval` | `60` | seconds between fetches; below ~30 s triggers rate limiting |
 | `force_push` | `600` | re-push unchanged numbers so the countdowns stay fresh |
 | `autopush` | `true` | `false` = tray only, leave the display alone |
+| `fire_rate` | `40` | 5h burn rate (%/hour) that sets the 5h line on fire; `0` turns it off |
+| `fire_window` | `600` | seconds of history the burn rate is measured over |
+
+An even pace uses up the 5h window at 20 %/h. When the rate over the last `fire_window` reaches
+`fire_rate`, the card becomes a looping GIF with flames on the 5h line. It goes back to the still
+card once the rate falls below half of `fire_rate`, or when the window resets. Preview it with
+`clock demo --fire --out fire.gif`.
 
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous

@@ -5,6 +5,8 @@ rather than a stream of pushed frames.
 """
 from __future__ import annotations
 
+import math
+
 from PIL import Image, ImageDraw, ImageSequence
 
 from clockdisplay.render import canvas, frames, widgets
@@ -32,6 +34,14 @@ def fill(pct: float, label: str = "", sub: str = "", steps: int = 20, frame_ms: 
     """Ring meter sweeping from 0 up to pct, then holding."""
     out = [frames.meter(pct * i / steps, label, sub) for i in range(steps + 1)]
     return canvas.to_gif(out, [frame_ms] * steps + [hold_ms])
+
+
+def dual_meter_fire(five_pct: float, five_reset: str, week_pct: float, week_reset: str,
+                    steps: int = 12, frame_ms: int = 80) -> bytes:
+    """The usage card with the 5h line on fire, looping seamlessly."""
+    out = [frames.dual_meter(five_pct, five_reset, week_pct, week_reset,
+                             fire_phase=2 * math.pi * i / steps) for i in range(steps)]
+    return canvas.to_gif(out, frame_ms)
 
 
 def blink(msg: str, fg: str | Color = TEXT, bg: str | Color = BG, on_ms: int = 600,

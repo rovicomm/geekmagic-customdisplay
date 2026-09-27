@@ -1,6 +1,8 @@
 """Composable drawing primitives for a 240x240 canvas."""
 from __future__ import annotations
 
+import math
+
 from PIL import Image, ImageDraw, ImageOps
 
 from clockdisplay.render.canvas import DIM, TRACK, Color, color, font
@@ -76,3 +78,28 @@ def paste_fit(img: Image.Image, src: Image.Image, box: tuple[int, int, int, int]
     ox = x0 + (size[0] - fitted.width) // 2
     oy = y0 + (size[1] - fitted.height) // 2
     img.paste(fitted, (ox, oy), fitted)
+
+
+FIRE = [(150, 20, 10), (230, 70, 20), (255, 150, 30), (255, 225, 110)]  # outer -> core
+
+
+def flames(img: Image.Image, box: tuple[int, int, int, int], phase: float) -> None:
+    """Flames rising from the bottom edge of box, one column per pixel. `phase` is in
+    radians; every term uses an integer multiple of it, so phase 0..2pi loops seamlessly."""
+    draw = ImageDraw.Draw(img)
+    x0, y0, x1, y1 = box
+    w, max_h = x1 - x0, y1 - y0
+    for i in range(w):
+        taper = min(1.0, (i + 1) / 10, (w - i) / 10)  # narrow the fire at both ends
+        v = (0.55 + 0.25 * math.sin(i * 0.31 - phase * 2) + 0.15 * math.sin(i * 0.11 + phase * 3)
+             + 0.10 * math.sin(i * 0.83 - phase * 5))
+        h = max_h * taper * max(0.0, min(v, 1.0))
+        for layer, c in enumerate(FIRE):
+            lh = h * (1 - layer * 0.26)
+            if lh >= 1:
+                draw.line((x0 + i, y1, x0 + i, y1 - lh), fill=c)
+    for k in range(max(1, w // 24)):  # sparks drifting up; offsets are fixed per spark
+        t = (phase / (2 * math.pi) + k * 0.37) % 1
+        sx = x0 + (k * 53 + int(6 * math.sin(phase + k))) % max(1, w)
+        sy = y1 - max_h * (0.5 + 0.7 * t)
+        draw.rectangle((sx, sy, sx + 1, sy + 1), fill=FIRE[2 if t < 0.6 else 1])

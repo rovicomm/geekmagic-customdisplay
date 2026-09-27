@@ -19,6 +19,8 @@ DEFAULTS = {
     "poll_interval": 60,   # seconds between usage fetches (<30 s trips Anthropic's rate limiter)
     "force_push": 600,     # re-push unchanged numbers after this long so countdowns stay fresh
     "autopush": True,      # push to the display (False: tray only)
+    "fire_rate": 40,       # 5h burn in %/hour that sets the 5h line on fire (0 = off; 20 = even pace)
+    "fire_window": 600,    # seconds of history the burn rate is measured over
 }
 
 _LEGACY_DIR = Path.home() / ".config" / "clockdisplay"

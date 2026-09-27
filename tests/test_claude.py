@@ -194,6 +194,38 @@ def test_meter_paused_does_not_push():
     assert m.tick().five_pct == 50 and pushes == []
 
 
+def test_meter_lights_and_puts_out_fire_on_burn_rate():
+    pcts = iter([10, 12, 14, 16, 18, 20, 22, 24] + [25] * 10 + [1])
+    now = [0.0]
+    shown = []
+    m = Meter(fetch=lambda: Usage(next(pcts), None, 10, None), display_factory=None,
+              clock=lambda: now[0])
+    m.push = lambda u, force=False: shown.append(m.on_fire)
+    states = []
+    for i in range(19):
+        now[0] = i * 60.0
+        m.tick()
+        states.append(m.on_fire)
+    # 2%/min = 120%/h lights it once 5 min of history exist. Once usage goes flat it stays
+    # lit at 30%/h (between the on and off thresholds) and goes out at 18%/h.
+    assert states[:5] == [False] * 5 and all(states[5:16])
+    assert states[16:] == [False] * 3
+    assert shown[0] is False and True in shown and shown[-1] is False
+
+
+def test_meter_fire_disabled_with_zero_rate(tmp_path):
+    config.save_config({"fire_rate": 0})
+    pcts = iter(range(0, 100, 10))
+    now = [0.0]
+    m = Meter(fetch=lambda: Usage(next(pcts), None, 10, None), display_factory=None,
+              clock=lambda: now[0])
+    m.push = lambda u, force=False: None
+    for i in range(8):
+        now[0] = i * 60.0
+        m.tick()
+    assert m.burn_rate and m.burn_rate > 100 and not m.on_fire
+
+
 # --- tray ------------------------------------------------------------------------
 
 def test_launch_command_frozen_and_venv(monkeypatch):
