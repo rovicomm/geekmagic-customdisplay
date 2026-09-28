@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clockdisplay"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Control a GeekMagic SmallTV-Ultra display over the LAN: render and push frames, GIFs and settings."
 requires-python = ">=3.10"
 dependencies = ["pillow>=10.0.0", "keyring>=25", "pystray>=0.19"]
@@ -18,6 +18,9 @@ clock = "clockdisplay.cli:main"
 
 [project.gui-scripts]
 clock-tray = "clockdisplay.tray:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "clockdisplay.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

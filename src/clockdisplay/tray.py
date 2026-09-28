@@ -20,7 +20,7 @@ from typing import Callable
 import pystray
 from PIL import Image, ImageDraw
 
-from clockdisplay import config
+from clockdisplay import __version__, config
 from clockdisplay.adsb.spotter import Spotter
 from clockdisplay.claude.auth import AuthError
 from clockdisplay.claude.usage import RateLimited, Usage
@@ -141,6 +141,7 @@ class TrayApp:
         """Rebuilt each time the menu opens, so displays added to config.json show up."""
         item = pystray.MenuItem
         return [
+            item(f"ClockDisplay v{__version__}", None, enabled=False),
             item(lambda _: self._status_line(), None, enabled=False),
             pystray.Menu.SEPARATOR,
             item("Refresh now", self._refresh, default=True),

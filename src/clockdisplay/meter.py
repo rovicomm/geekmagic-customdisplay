@@ -25,6 +25,7 @@ from clockdisplay.render import anim, frames
 log = logging.getLogger(__name__)
 
 MAX_BACKOFF = 600
+MIN_POLL = 30  # seconds; the usage endpoint rate-limits faster polling
 FIRE_OFF = 0.5  # hysteresis: the fire goes out once the burn rate drops below half of fire_rate
 RESET_SLACK = dt.timedelta(seconds=60)  # a window may reset this early (clock skew)
 RESET_JUMP = dt.timedelta(hours=1)      # resets_at must move this far to count, not just jitter
@@ -300,7 +301,7 @@ class Meter:
         self.stop = stop
         failures = 0
         while not stop.is_set():
-            interval = int(config.load_config()["poll_interval"])
+            interval = max(MIN_POLL, int(config.load_config()["poll_interval"]))
             try:
                 usage = self.tick()
                 failures = 0

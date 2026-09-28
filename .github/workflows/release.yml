@@ -1,0 +1,72 @@
+# Build dist\ClockDisplay.exe, attest its provenance and publish it as a GitHub Release.
+# Push a tag matching clockdisplay.__version__ (e.g. v1.0.0) to release; run it manually
+# (Actions -> Release -> Run workflow) for a test build uploaded as a workflow artifact only.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write      # create the release
+  id-token: write      # OIDC token for the Sigstore attestation
+  attestations: write  # store the attestation
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[build,dev]"
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Check tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(python -c "import clockdisplay; print(clockdisplay.__version__)")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match __version__ $version"
+            exit 1
+          fi
+
+      - name: Build exe
+        run: python scripts/build_exe.py
+
+      - name: Checksum
+        shell: bash
+        working-directory: dist
+        run: sha256sum ClockDisplay.exe > ClockDisplay.exe.sha256
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/ClockDisplay.exe
+
+      - name: Upload workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClockDisplay
+          path: |
+            dist/ClockDisplay.exe
+            dist/ClockDisplay.exe.sha256
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/ClockDisplay.exe dist/ClockDisplay.exe.sha256 \
+            --title "ClockDisplay $GITHUB_REF_NAME" --generate-notes

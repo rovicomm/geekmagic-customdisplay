@@ -92,6 +92,8 @@ HKCU `Run` entry) and Quit. Displays added to or removed from `config.json` show
 poll. Only one instance runs at a time.
 
 ### Portable exe
+Download `ClockDisplay.exe` from the [latest release](https://github.com/rovicomm/geekmagic-customdisplay/releases/latest),
+or build it yourself:
 ```powershell
 .venv\Scripts\pip install -e ".[build]"
 .venv\Scripts\python scripts\build_exe.py     # -> dist\ClockDisplay.exe (~19 MB)
@@ -100,7 +102,23 @@ poll. Only one instance runs at a time.
 anywhere. It still uses the machine's Claude Code sign-in, Credential Manager and
 `%LOCALAPPDATA%\clockdisplay`. "Start with Windows" points at wherever the exe lives, so toggle
 it off and on again after moving it. One-file exes unpack to `%TEMP%` on launch (a second or two),
-and SmartScreen may warn the first time because the exe is unsigned.
+and SmartScreen may warn the first time ("More info" -> "Run anyway") because the exe is not
+Authenticode-signed.
+
+Release builds come from GitHub Actions with a signed build-provenance attestation, so you can
+check that a download was built from this repo's source:
+```powershell
+gh attestation verify ClockDisplay.exe --repo rovicomm/geekmagic-customdisplay
+```
+
+### Releasing
+The version lives in `src/clockdisplay/__init__.py` (`__version__`). Bump it, merge to `main`,
+then push a matching tag. `.github/workflows/release.yml` tests, builds, attests and publishes
+the exe as a GitHub Release:
+```powershell
+git tag v1.0.0 origin/main
+git push origin v1.0.0
+```
 
 Files live in `%LOCALAPPDATA%\clockdisplay`: `config.json`, `state.json`, `logs\tray.log` and the
 aircraft photo cache `photos\`.
@@ -110,7 +128,7 @@ aircraft photo cache `photos\`.
 | --- | --- | --- |
 | `displays` | one entry from `host` | list of `{name, host, app}`; see Setup |
 | `host` | `192.0.2.10` | legacy single-display IP, used when `displays` is absent |
-| `poll_interval` | `60` | seconds between fetches; below ~30 s triggers rate limiting |
+| `poll_interval` | `120` | seconds between fetches (minimum 30); faster polling triggers rate limiting |
 | `force_push` | `600` | re-push unchanged numbers so the countdowns stay fresh |
 | `autopush` | `true` | `false` = tray only, leave the display alone |
 | `fire_rate` | `40` | 5h burn rate (%/hour) that sets the 5h line on fire; `0` turns it off |
