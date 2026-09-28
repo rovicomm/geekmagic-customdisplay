@@ -9,6 +9,7 @@ Behaviour confirmed on Ultra-V9.0.45:
 from __future__ import annotations
 
 import hashlib
+import threading
 
 from PIL import Image
 
@@ -18,6 +19,17 @@ from clockdisplay.render.canvas import to_jpeg
 
 STILL_SLOT = f"/image/{OWN_PREFIX}main.jpg"
 ANIM_SLOT  = f"/image/{OWN_PREFIX}anim.gif"
+RESET_SLOT = f"/image/{OWN_PREFIX}reset_{{}}.gif"  # .format("5h"): kept on the device, see show_file
+ROOM_MARGIN = 32 * 1024  # free space to leave beyond an upload's size
+
+_upload_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _upload_lock(host: str) -> threading.Lock:
+    """One store() at a time per display, so a background upload and a reset can't both send it."""
+    with _locks_guard:
+        return _upload_locks.setdefault(host, threading.Lock())
 
 
 class Display:
@@ -46,6 +58,38 @@ class Display:
         self.state.update(showing=slot, hash=digest)
         config.save_display_state(self.device.host, self.state)
         return True
+
+    def show_file(self, path: str, data: bytes) -> None:
+        """Show a file kept on the device under its own name, uploading it only if it isn't
+        there yet (or has changed). For big GIFs that are shown again and again."""
+        self._take_over()
+        self.store(path, data)
+        self.device.show_image(path)
+        self.state.update(showing=path, hash=hashlib.sha1(data).hexdigest())
+        config.save_display_state(self.device.host, self.state)
+
+    def store(self, path: str, data: bytes) -> bool:
+        """Upload `data` to `path` unless the device already has this exact file. Doesn't
+        change what's on screen (unless `path` is). Returns whether it uploaded."""
+        digest = hashlib.sha1(data).hexdigest()
+        directory, name = path.rsplit("/", 1)
+        with _upload_lock(self.device.host):
+            files = {f.path: f for f in self.device.list_files(directory)}
+            if config.stored_file(self.device.host, path) == digest and path in files:
+                return False
+            old = files[path].size_kb * 1024 if path in files else 0
+            self._make_room(len(data) - old, files)
+            self.device.upload(data, name, directory)
+            config.set_stored_file(self.device.host, path, digest)
+        return True
+
+    def _make_room(self, need: int, files: dict) -> None:
+        """Delete our animation slot (re-uploaded whenever it's next used) if the device is
+        too full for `need` more bytes and it isn't on screen. Flash is only ~3 MB."""
+        if ANIM_SLOT not in files or config.load_display_state(self.device.host).get("showing") == ANIM_SLOT:
+            return
+        if self.device.space()["free"] < need + ROOM_MARGIN:
+            self.device.delete(ANIM_SLOT)
 
     def _take_over(self) -> None:
         """Switch to Photo Album with autoplay off, remembering the theme to restore."""

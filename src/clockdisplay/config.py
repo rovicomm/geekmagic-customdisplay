@@ -24,6 +24,7 @@ DEFAULTS = {
     "autopush": True,      # push to the display (False: tray only)
     "fire_rate": 40,       # 5h burn in %/hour that sets the 5h line on fire (0 = off; 20 = even pace)
     "fire_window": 600,    # seconds of history the burn rate is measured over
+    "reset_seconds": 6,    # seconds a celebration GIF stays up when a 5h/7d window resets (0 = off)
 }
 
 # Plane spotting from a local ADS-B receiver (readsb/tar1090/dump1090 "aircraft.json").
@@ -208,4 +209,18 @@ def save_display_state(host: str, st: dict) -> None:
     with _state_lock:
         state = _load_states()
         state["displays"][host] = st
+        _write("state.json", state)
+
+
+def stored_file(host: str, path: str) -> str | None:
+    """sha1 of what we last uploaded to `path` on `host` (files kept on the device), if any.
+    Kept apart from the display state, which pushes rewrite wholesale."""
+    with _state_lock:
+        return _load_states().get("files", {}).get(host, {}).get(path)
+
+
+def set_stored_file(host: str, path: str, digest: str) -> None:
+    with _state_lock:
+        state = _load_states()
+        state.setdefault("files", {}).setdefault(host, {})[path] = digest
         _write("state.json", state)
