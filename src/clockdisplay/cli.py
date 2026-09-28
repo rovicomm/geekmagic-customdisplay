@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from clockdisplay import config
+from clockdisplay import __version__, config
 from clockdisplay.adsb.source import SourceError
 from clockdisplay.claude import auth
 from clockdisplay.claude.auth import AuthError
@@ -309,6 +309,7 @@ def cmd_anim(args):
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="clock", description="Control a SmallTV-Ultra display.")
+    p.add_argument("--version", action="version", version=f"clock {__version__}")
     p.add_argument("--host", help="device IP/hostname (default $CLOCK_HOST or the first configured display)")
     p.add_argument("-d", "--display", metavar="NAME",
                    help="configured display to target by name, or 'all' (see `clock displays`)")

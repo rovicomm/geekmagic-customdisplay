@@ -19,7 +19,7 @@ DEFAULT_HOST = "192.0.2.10"
 
 DEFAULTS = {
     "host": DEFAULT_HOST,
-    "poll_interval": 60,   # seconds between usage fetches (<30 s trips Anthropic's rate limiter)
+    "poll_interval": 120,  # seconds between usage fetches (floored at 30; faster trips Anthropic's rate limiter)
     "force_push": 600,     # re-push unchanged numbers after this long so countdowns stay fresh
     "autopush": True,      # push to the display (False: tray only)
     "fire_rate": 40,       # 5h burn in %/hour that sets the 5h line on fire (0 = off; 20 = even pace)

@@ -171,7 +171,7 @@ def test_config_dir_uses_localappdata_on_windows(tmp_path, monkeypatch):
 
 def test_load_config_defaults():
     cfg = config.load_config()
-    assert cfg["poll_interval"] == 60 and cfg["autopush"] is True and cfg["host"]
+    assert cfg["poll_interval"] == 120 and cfg["autopush"] is True and cfg["host"]
 
 
 # --- meter -----------------------------------------------------------------------
