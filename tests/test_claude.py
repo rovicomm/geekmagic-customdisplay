@@ -1,15 +1,19 @@
 import datetime as dt
 import io
 import json
+import threading
 import time
 
 import pytest
+from PIL import Image
 
 from clockdisplay import config
 from clockdisplay.claude import auth, usage
 from clockdisplay.claude.usage import Usage, format_reset, parse
 from clockdisplay.device import DeviceError
+from clockdisplay.display import RESET_SLOT
 from clockdisplay.meter import Meter
+from clockdisplay.render import anim
 
 UTC = dt.timezone.utc
 NOW = dt.datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
@@ -309,6 +313,116 @@ def test_meter_skips_held_display_and_keeps_history_on_rename():
     m.rename("b", "shelf")
     m.tick()
     assert m.targets["shelf"].paused and "b" not in m.targets
+
+
+class Recorder:
+    """Display stand-in that logs what each host was shown: "5h"/"7d" for reset GIFs, else
+    "card". Files stored on it go in `stored` as (host, path)."""
+    GIFS = {anim.reset_gif(w): w for w in ("5h", "7d")}
+
+    def __init__(self, log, host, stored=None):
+        self.log, self.host, self.stored = log, host, stored if stored is not None else []
+
+    def show(self, content, force=False):
+        self.log.append((self.host, "card"))
+        return True
+
+    def show_file(self, path, data):
+        assert path == RESET_SLOT.format(self.GIFS[data])
+        self.log.append((self.host, self.GIFS[data]))
+
+    def store(self, path, data):
+        self.stored.append((self.host, path))
+        return True
+
+    def restore(self):
+        pass
+
+
+def _reset_meter(usages, shown):
+    """Meter fed `usages` one per tick, one minute apart, starting at NOW."""
+    it, now = iter(usages), [NOW.timestamp()]
+    m = Meter(fetch=lambda: next(it), clock=lambda: now[0], display_factory=lambda h: Recorder(shown, h))
+    m.stop.set()  # don't actually wait out reset_seconds
+
+    def tick():
+        m.tick()
+        for th in [t for t in threading.enumerate() if t.name.startswith(("reset-", "store-"))]:
+            th.join()
+        now[0] += 60
+    return m, tick
+
+
+def test_meter_celebrates_5h_reset_then_shows_card():
+    t = NOW + dt.timedelta(seconds=30)
+    week = NOW + dt.timedelta(days=3)
+    shown = []
+    _, tick = _reset_meter([Usage(90, t, 50, week), Usage(0, t + dt.timedelta(hours=5), 50, week),
+                            Usage(1, t + dt.timedelta(hours=5), 50, week)], shown)
+    tick(); tick()
+    host = config.load_displays()[0]["host"]
+    assert shown == [(host, "card"), (host, "5h"), (host, "card")]
+    tick()  # same resets_at: nothing more to celebrate
+    assert [s for _, s in shown].count("5h") == 1
+
+
+def test_meter_celebrates_both_resets_7d_first():
+    t = NOW
+    shown = []
+    _, tick = _reset_meter([Usage(90, t, 99, t), Usage(0, None, 0, None)], shown)
+    tick(); tick()
+    assert [s for _, s in shown] == ["card", "7d", "5h", "card"]
+
+
+@pytest.mark.parametrize("before,after", [
+    (NOW + dt.timedelta(hours=2), NOW + dt.timedelta(hours=2, seconds=1)),  # not due yet; jitter
+    (NOW, NOW + dt.timedelta(seconds=5)),                                   # due, but only jitter
+    (None, NOW + dt.timedelta(hours=5)),                                    # nothing known before
+])
+def test_meter_no_celebration_without_a_real_reset(before, after):
+    shown = []
+    _, tick = _reset_meter([Usage(50, before, 10, None), Usage(50, after, 10, None)], shown)
+    tick(); tick()
+    assert all(s == "card" for _, s in shown)
+
+
+def test_meter_reset_celebration_off_paused_and_held():
+    t, later = NOW, NOW + dt.timedelta(hours=5)
+    config.save_config({"reset_seconds": 0})
+    shown = []
+    _, tick = _reset_meter([Usage(90, t, 10, None), Usage(0, later, 10, None)], shown)
+    tick(); tick()
+    assert all(s == "card" for _, s in shown)
+
+    config.save_config({"reset_seconds": 6})
+    _two_displays()
+    shown = []
+    m, tick = _reset_meter([Usage(90, t, 10, None), Usage(0, later, 10, None)], shown)
+    tick()
+    m.targets["a"].paused = True
+    m.targets["b"].hold = True
+    tick()
+    assert all(s == "card" for _, s in shown)
+
+
+def test_meter_stores_reset_gifs_once_per_display():
+    _two_displays()
+    stored = []
+    it = iter([Usage(40, None, 10, None)] * 3)
+    m = Meter(fetch=lambda: next(it), display_factory=lambda h: Recorder([], h, stored))
+    for _ in range(3):
+        m.tick()
+        for th in [t for t in threading.enumerate() if t.name.startswith("store-")]:
+            th.join()
+    assert sorted(stored) == [(h, RESET_SLOT.format(w)) for h in ("h1", "h2") for w in ("5h", "7d")]
+
+
+@pytest.mark.parametrize("window", ["5h", "7d"])
+def test_reset_gifs_fit_the_device(window):
+    data = anim.reset_gif(window)
+    assert len(data) <= 400 * 1024  # both are kept on the device, ~1.2 MB free
+    with Image.open(io.BytesIO(data)) as im:
+        assert im.size == (240, 240) and im.n_frames > 1
 
 
 # --- tray ------------------------------------------------------------------------

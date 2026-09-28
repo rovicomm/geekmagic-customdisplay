@@ -7,6 +7,7 @@ unreachable display doesn't hold up the rest.
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import threading
 import time
@@ -18,13 +19,16 @@ from typing import Callable
 from clockdisplay import config
 from clockdisplay.claude.usage import RateLimited, Usage, fetch_usage
 from clockdisplay.device import DeviceError, UltraDevice
-from clockdisplay.display import Display
+from clockdisplay.display import RESET_SLOT, Display
 from clockdisplay.render import anim, frames
 
 log = logging.getLogger(__name__)
 
 MAX_BACKOFF = 600
 FIRE_OFF = 0.5  # hysteresis: the fire goes out once the burn rate drops below half of fire_rate
+RESET_SLACK = dt.timedelta(seconds=60)  # a window may reset this early (clock skew)
+RESET_JUMP = dt.timedelta(hours=1)      # resets_at must move this far to count, not just jitter
+RESET_WINDOWS = ("5h", "7d")
 
 
 def _default_display(host: str) -> Display:
@@ -69,6 +73,8 @@ class Meter:
         self.on_fire = False
         self._warned_apps: set[str] = set()
         self.wake = threading.Event()  # set to make run() tick now
+        self.stop = threading.Event()  # run()'s stop; cuts reset celebrations short
+        self._stored: set[str] = set()  # hosts the reset GIFs have been sent to this session
 
     def sync_targets(self, cfg: dict | None = None) -> None:
         """Match self.targets to the configured displays, keeping pause state and push history."""
@@ -91,19 +97,45 @@ class Meter:
         force_push interval has elapsed."""
         cfg = config.load_config()
         self.sync_targets(cfg)
-        usage = self.fetch()
+        prev, usage = self.last, self.fetch()
         self.last = usage
         self._update_burn(usage.five_pct, cfg)
         if push is None:
             push = cfg["autopush"] and not self.paused
-        if push:
+        resets = self._resets(prev, usage) if push and float(cfg["reset_seconds"]) > 0 else []
+        if resets:
+            log.info("usage reset: %s", ", ".join(resets))
+            self.celebrate(resets, float(cfg["reset_seconds"]))  # the card follows on release
+        elif push:
             key, now = self._key(usage), self.clock()
             due = [t for t in self.targets.values()
                    if t.app == "claude" and not t.paused and not t.hold
                    and (force or key != t.pushed_key or now - t.pushed_at >= cfg["force_push"])]
             if due:
                 self._push_all(due, self.render(usage), force, key, now)
+        if push and float(cfg["reset_seconds"]) > 0:
+            self._store_reset_gifs()
         return usage
+
+    def _store_reset_gifs(self) -> None:
+        """Once per display per session, upload the reset GIFs in the background (if the
+        device doesn't have them already) so a reset plays them without waiting on an upload."""
+        for t in self.targets.values():
+            if t.app != "claude" or t.paused or t.host in self._stored:
+                continue
+            self._stored.add(t.host)
+
+            def run(host: str = t.host, name: str = t.name) -> None:
+                try:
+                    d = self.display_factory(host)
+                    for w in RESET_WINDOWS:
+                        if d.store(RESET_SLOT.format(w), anim.reset_gif(w)):
+                            log.info("display %s: stored %s", name, RESET_SLOT.format(w))
+                except Exception as e:  # tried again on the next reset, and next session
+                    log.warning("display %s (%s): storing reset GIFs: %s: %s",
+                                name, host, type(e).__name__, e)
+
+            threading.Thread(target=run, name=f"store-{t.name}", daemon=True).start()
 
     def _key(self, usage: Usage) -> tuple:
         """What's on the card, as far as deciding whether it needs re-pushing goes."""
@@ -129,6 +161,51 @@ class Meter:
             self.on_fire = True
         elif self.burn_rate < threshold * FIRE_OFF:
             self.on_fire = False
+
+    def _resets(self, prev: Usage | None, usage: Usage) -> list[str]:
+        """Windows ("7d", "5h") whose known reset time has passed and moved on since `prev`."""
+        if prev is None:
+            return []
+        now = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc)
+        out = []
+        for window, old, new in (("7d", prev.week_resets_at, usage.week_resets_at),
+                                 ("5h", prev.five_resets_at, usage.five_resets_at)):
+            if old is not None and now >= old - RESET_SLACK and (new is None or new >= old + RESET_JUMP):
+                out.append(window)
+        return out
+
+    def celebrate(self, windows: list[str], seconds: float) -> list[threading.Thread]:
+        """Play each window's reset GIF for `seconds` on every active meter display in the
+        background, then hand the display back (which puts the usage card up)."""
+        # Kept on the device under their own names, so only the first reset ever uploads them.
+        gifs = [(RESET_SLOT.format(w), anim.reset_gif(w)) for w in windows]
+
+        def run(t: Target) -> None:
+            try:
+                if not self.hold(t, show=lambda d: d.show_file(*gifs[0])):
+                    return
+            except Exception as e:
+                self._failed(t, e)
+                return
+            try:
+                for gif in gifs[1:]:
+                    self.stop.wait(seconds)
+                    self.display_factory(t.host).show_file(*gif)
+                self.stop.wait(seconds)
+                t.error = None
+            except Exception as e:
+                self._failed(t, e)
+            finally:
+                try:
+                    self.release(t)
+                except Exception as e:
+                    self._failed(t, e)
+
+        threads = [threading.Thread(target=run, args=(t,), name=f"reset-{t.name}", daemon=True)
+                   for t in self.targets.values() if t.app == "claude" and not t.paused and not t.hold]
+        for th in threads:
+            th.start()
+        return threads
 
     def rename(self, old: str, new: str) -> None:
         """Carry a display's pause state and push history over to its new name."""
@@ -162,14 +239,19 @@ class Meter:
         finally:
             self.release(t)
 
-    def hold(self, t: Target, content) -> bool:
-        """Put `content` on a display and keep the meter off it until release(). False if
-        something else already holds it. Raises (and doesn't hold) if it can't be reached."""
+    def hold(self, t: Target, content=None, show: Callable[[Display], object] | None = None) -> bool:
+        """Put `content` (or whatever `show(display)` puts up) on a display and keep the meter
+        off it until release(). False if something else already holds it. Raises (and doesn't
+        hold) if it can't be reached."""
         if t.hold:
             return False
         t.hold = True
         try:
-            self.display_factory(t.host).show(content, force=True)
+            d = self.display_factory(t.host)
+            if show:
+                show(d)
+            else:
+                d.show(content, force=True)
         except BaseException:
             t.hold = False
             raise
@@ -194,9 +276,7 @@ class Meter:
             try:
                 self.display_factory(t.host).show(content, force=force)
             except Exception as e:  # one bad display must not stop the others
-                t.error = "unreachable" if isinstance(e, (DeviceError, OSError)) \
-                    else f"error: {type(e).__name__}"
-                log.warning("display %s (%s): %s: %s", t.name, t.host, type(e).__name__, e)
+                self._failed(t, e)
                 return
             t.error, t.last_push = None, self.clock()
             if key is not None:
@@ -209,10 +289,15 @@ class Meter:
         with ThreadPoolExecutor(max_workers=min(len(targets), 8), thread_name_prefix="push") as pool:
             list(pool.map(one, targets))
 
+    def _failed(self, t: Target, e: Exception) -> None:
+        t.error = "unreachable" if isinstance(e, (DeviceError, OSError)) else f"error: {type(e).__name__}"
+        log.warning("display %s (%s): %s: %s", t.name, t.host, type(e).__name__, e)
+
     def run(self, stop: threading.Event, on_update: Callable[[Usage | Exception], None] = lambda _: None,
             wake: threading.Event | None = None) -> None:
         """Poll until `stop` is set. Setting `wake` triggers an immediate refresh."""
         wake = self.wake = wake or self.wake
+        self.stop = stop
         failures = 0
         while not stop.is_set():
             interval = int(config.load_config()["poll_interval"])

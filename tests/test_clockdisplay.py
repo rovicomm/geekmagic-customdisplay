@@ -5,8 +5,8 @@ import pytest
 from PIL import Image
 
 from clockdisplay import config
-from clockdisplay.device import MAX_UPLOAD, UltraDevice, parse_filelist
-from clockdisplay.display import ANIM_SLOT, STILL_SLOT, Display
+from clockdisplay.device import MAX_UPLOAD, RemoteFile, UltraDevice, parse_filelist
+from clockdisplay.display import ANIM_SLOT, RESET_SLOT, STILL_SLOT, Display
 from clockdisplay.render import anim, canvas, frames
 
 FILELIST = (
@@ -69,7 +69,8 @@ def test_gif_from_file_refits(tmp_path):
 
 class FakeDevice:
     def __init__(self, theme=1, host="10.0.0.5"):
-        self._theme, self.calls, self.host = theme, [], host
+        self._theme, self.calls, self.host, self.files = theme, [], host, set()
+        self.free = 1_000_000
 
     def theme(self):
         return self._theme
@@ -86,6 +87,17 @@ class FakeDevice:
 
     def upload(self, data, name, directory):
         self.calls.append(("upload", f"{directory}/{name}"))
+        self.files.add(f"{directory}/{name}")
+
+    def list_files(self, directory):
+        return [RemoteFile(p, 1) for p in sorted(self.files) if p.startswith(directory + "/")]
+
+    def space(self):
+        return {"total": 3_000_000, "free": self.free}
+
+    def delete(self, path):
+        self.calls.append(("delete", path))
+        self.files.discard(path)
 
     def show_image(self, path):
         self.calls.append(("show", path))
@@ -117,6 +129,39 @@ def test_display_takes_over_dedups_and_restores():
 
     assert Display(dev).restore() == 1 and dev.theme() == 1
     assert "previous_theme" not in config.load_display_state(dev.host)
+
+
+def test_show_file_uploads_only_when_missing_or_changed():
+    dev = FakeDevice(theme=3)
+    slot, gif = RESET_SLOT.format("5h"), anim.blink("yes")
+
+    Display(dev).show_file(slot, gif)
+    assert dev.calls == [("upload", slot), ("show", slot)]
+
+    dev.calls.clear()
+    Display(dev).show(frames.solid("red"))          # the card in between
+    Display(dev).show_file(slot, gif)               # still on the device: just re-select it
+    assert dev.calls == [("upload", STILL_SLOT), ("show", STILL_SLOT), ("show", slot)]
+
+    dev.calls.clear()
+    dev.files.discard(slot)                         # e.g. `clock clean`
+    assert Display(dev).store(slot, gif) is True
+    assert Display(dev).store(slot, gif) is False
+    assert Display(dev).store(slot, anim.blink("no")) is True   # new artwork
+    assert dev.calls == [("upload", slot), ("upload", slot)]
+
+
+def test_store_makes_room_by_dropping_the_idle_anim_slot():
+    dev = FakeDevice(theme=3)
+    Display(dev).show(anim.blink("x"))              # cm_anim.gif on screen
+    dev.free = 10_000
+    gif = anim.blink("yes") * 20
+    Display(dev).store(RESET_SLOT.format("7d"), gif)
+    assert ("delete", ANIM_SLOT) not in dev.calls   # never delete what's showing
+
+    Display(dev).show(frames.solid("red"))          # card up: the anim slot is idle
+    Display(dev).store(RESET_SLOT.format("5h"), gif)
+    assert ("delete", ANIM_SLOT) in dev.calls
 
 
 def test_display_state_is_per_host():

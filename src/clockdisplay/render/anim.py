@@ -6,6 +6,7 @@ rather than a stream of pushed frames.
 from __future__ import annotations
 
 import math
+from importlib import resources
 
 from PIL import Image, ImageDraw, ImageSequence
 
@@ -63,3 +64,8 @@ def from_file(path: str, mode: str = "cover") -> bytes:
             out.append(img)
             durations.append(fr.info.get("duration", 100))
     return canvas.to_gif(out, durations)
+
+
+def reset_gif(window: str) -> bytes:
+    """The bundled 240x240 celebration GIF for a usage reset: window is "5h" or "7d"."""
+    return (resources.files("clockdisplay") / "assets" / f"reset_{window}.gif").read_bytes()

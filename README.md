@@ -115,12 +115,22 @@ aircraft photo cache `photos\`.
 | `autopush` | `true` | `false` = tray only, leave the display alone |
 | `fire_rate` | `40` | 5h burn rate (%/hour) that sets the 5h line on fire; `0` turns it off |
 | `fire_window` | `600` | seconds of history the burn rate is measured over |
+| `reset_seconds` | `6` | seconds a celebration GIF plays when the 5h or 7d window resets; `0` turns it off |
 
 An even pace uses up the 5h window at 20 %/h. When the rate over the last `fire_window` reaches
 `fire_rate`, the card becomes a looping GIF with flames on the 5h line. It goes back to the still
 card once the rate falls below half of `fire_rate`, or when the window resets. Preview it with
 `clock demo --fire --out fire.gif`, or watch it on the device in
 [docs/images/fire.mp4](docs/images/fire.mp4).
+
+When a window resets, every `claude` display plays a short GIF for `reset_seconds` before the card
+comes back: [yesssss.gif](docs/images/yesssss.gif) for the 5h window and
+[yesssssss.gif](docs/images/yesssssss.gif) for the 7d one (both play, 7d first, if they reset at
+the same time). Both are kept on the display as `cm_reset_5h.gif` and `cm_reset_7d.gif` (~760 KB
+in all), uploaded once in the background when the meter starts, so a reset doesn't wait on
+an upload. The device copies in `src/clockdisplay/assets/` are cropped to 240x240, with half the
+frames, to fit both in the display's free space. Regenerate them with
+`.venv\Scripts\python scripts\reset_gifs.py`. Preview one with `clock gif src/clockdisplay/assets/reset_5h.gif`.
 
 ## Aircraft overhead (ADS-B)
 If you run an ADS-B receiver on your network (readsb, tar1090, dump1090-fa or piaware), the

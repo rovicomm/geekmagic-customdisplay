@@ -31,7 +31,8 @@ a = Analysis(
     # so static analysis misses both. win32ctypes (keyring's Credential Manager access)
     # likewise picks its ctypes/cffi implementation at runtime.
     hiddenimports=["pystray._win32", "keyring.backends.Windows", *collect_submodules("win32ctypes")],
-    datas=copy_metadata("keyring"),
+    datas=[*copy_metadata("keyring"),
+           (str(ROOT / "src" / "clockdisplay" / "assets"), "clockdisplay/assets")],
     excludes=["tkinter", "pytest"],
 )
 pyz = PYZ(a.pure)
