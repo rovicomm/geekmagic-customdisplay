@@ -460,20 +460,24 @@ class TrayApp:
         self.icon.update_menu()
 
     def _install_bar(self) -> None:
-        pages = zebar.startup_pages()
-        if not pages:
-            self.icon.notify(f"No Zebar widgets found in {zebar.zebar_dir()}", APP_NAME)
+        targets = zebar.resolve_startup()
+        found = [t for t in targets if t.page]
+        for t in targets:
+            log.info("zebar startup %s/%s: %s", t.pack, t.widget, t.page or t.reason)
+        if not found:
+            self.icon.notify(f"Couldn't find Zebar's bar: {targets[0].reason}"[:250], APP_NAME)
             return
         try:
-            for page in pages:
-                zebar.install(page, int(config.load_config()["zebar"]["port"]))
+            for t in found:
+                zebar.install(t.page, int(config.load_config()["zebar"]["port"]))
         except (OSError, ValueError) as e:
             log.exception("zebar install failed")
             self.icon.notify(f"Zebar install failed: {e}"[:250], APP_NAME)
             return
         if not self.bar.enabled:
             self._toggle_bar()
-        self.icon.notify("Installed. Reload Zebar to see it (or restart it).", APP_NAME)
+        names = ", ".join(f"{t.pack}/{t.widget}" for t in found)
+        self.icon.notify(f"Installed into {names}. Restart Zebar to see it."[:250], APP_NAME)
 
     def _uninstall_bar(self) -> None:
         removed = [p for p in zebar.startup_pages() if zebar.uninstall(p)]

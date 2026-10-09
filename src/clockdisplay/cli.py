@@ -183,19 +183,29 @@ def cmd_displays(args):
 
 def cmd_zebar(args):
     from clockdisplay.desktop import zebar
-    pages = zebar.startup_pages()
-    if not pages:
-        raise ValueError(f"no Zebar startup widgets found in {zebar.zebar_dir()}")
-    for page in pages:
+    targets = zebar.resolve_startup()
+    print(f"Zebar starts (from {zebar.zebar_dir() / 'settings.json'}):")
+    for t in targets:
+        print(f"  {t.pack} / {t.widget}")
+        if t.page is None:
+            print(f"    not found: {t.reason}")
+            continue
+        print(f"    {t.page}")
         if args.action == "install":
-            zebar.install(page, int(config.load_config()["zebar"]["port"]))
-            print(f"installed into {page}")
+            zebar.install(t.page, int(config.load_config()["zebar"]["port"]))
+            state = "installed"
         elif args.action == "uninstall":
-            print(f"removed from {page}" if zebar.uninstall(page) else f"not installed in {page}")
+            state = "removed" if zebar.uninstall(t.page) else "wasn't installed"
         else:
-            print(f"{'installed' if zebar.installed(page) else 'not installed':<14} {page}")
+            state = "installed" if zebar.installed(t.page) else "not installed"
+        layout = "neosoft layout" if t.neosoft else "other layout: goes at the start of the right-hand group"
+        print(f"    {state}; {layout}")
+    if not any(t.page for t in targets):
+        raise ValueError("no Zebar widget to install into")
     if args.action != "status":
         print("reload Zebar (or restart it) to apply; turn it on with the tray's Zebar bar menu")
+        if any(t.page and zebar.downloads_dir() in t.page.parents for t in targets):
+            print("marketplace pack: updating it from the marketplace undoes this, so re-run install")
 
 
 # --- Claude usage ------------------------------------------------------------
