@@ -26,4 +26,4 @@ version = {attr = "clockdisplay.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-clockdisplay = ["assets/*.gif"]
+clockdisplay = ["assets/*.gif", "assets/zebar/*"]

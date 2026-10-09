@@ -33,6 +33,9 @@ RESET_WINDOWS = ("5h", "7d")
 
 
 def _default_display(host: str) -> Display:
+    if host == config.WINDOW_HOST:  # the desktop window: an in-memory device it mirrors
+        from clockdisplay.desktop.virtual import window_device
+        return Display(window_device())
     return Display(UltraDevice(host))
 
 
@@ -76,6 +79,7 @@ class Meter:
         self.wake = threading.Event()  # set to make run() tick now
         self.stop = threading.Event()  # run()'s stop; cuts reset celebrations short
         self._stored: set[str] = set()  # hosts the reset GIFs have been sent to this session
+        self.on_reset: Callable[[list[str]], None] = lambda _: None  # e.g. the Zebar pop-up
 
     def sync_targets(self, cfg: dict | None = None) -> None:
         """Match self.targets to the configured displays, keeping pause state and push history."""
@@ -103,9 +107,14 @@ class Meter:
         self._update_burn(usage.five_pct, cfg)
         if push is None:
             push = cfg["autopush"] and not self.paused
-        resets = self._resets(prev, usage) if push and float(cfg["reset_seconds"]) > 0 else []
+        resets = self._resets(prev, usage) if float(cfg["reset_seconds"]) > 0 else []
         if resets:
             log.info("usage reset: %s", ", ".join(resets))
+            try:
+                self.on_reset(resets)
+            except Exception:
+                log.exception("on_reset failed")
+        if resets and push:
             self.celebrate(resets, float(cfg["reset_seconds"]))  # the card follows on release
         elif push:
             key, now = self._key(usage), self.clock()

@@ -24,10 +24,10 @@ from clockdisplay import __version__, config
 from clockdisplay.adsb.spotter import Spotter
 from clockdisplay.claude.auth import AuthError
 from clockdisplay.claude.usage import RateLimited, Usage
-from clockdisplay.device import UltraDevice
-from clockdisplay.display import Display
+from clockdisplay.desktop import server, winui, zebar
+from clockdisplay.desktop.virtual import window_device
 from clockdisplay.meter import Meter, Target
-from clockdisplay.render import canvas, frames, widgets
+from clockdisplay.render import anim, canvas, frames, widgets
 
 log = logging.getLogger("clockdisplay.tray")
 
@@ -134,6 +134,11 @@ class TrayApp:
         self.stop, self.wake = threading.Event(), threading.Event()
         self.error: str | None = None
         self.meter.sync_targets()
+        self.meter.on_reset = self._on_reset
+        self.bar = server.BarState()
+        self.bar.enabled = bool(config.load_config()["zebar"]["enabled"])
+        self.bar_error: str | None = None
+        self.mirror: winui.MirrorWindow | bool | None = None  # True while it's being built
         self.icon = pystray.Icon(APP_NAME, render_icon(None), "Claude usage: starting…",
                                  pystray.Menu(self._items))
 
@@ -150,6 +155,14 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
             *(item(t.name, self._display_menu(t.name)) for t in self.meter.targets.values()),
             item("Aircraft", self._aircraft_menu()),
+            pystray.Menu.SEPARATOR,
+            item("Desktop window", self._toggle_window, checked=lambda _: config.window_enabled()),
+            item("Zebar bar", pystray.Menu(
+                item(lambda _: self.bar_error or "Usage in the bar's right-hand group", None, enabled=False),
+                item("Show Claude usage in the bar", self._toggle_bar, checked=lambda _: self.bar.enabled),
+                item("Install into Zebar", self._install_bar),
+                item("Uninstall from Zebar", self._uninstall_bar),
+            )),
             pystray.Menu.SEPARATOR,
             item("Edit settings", self._edit_settings),
             item("Open data folder", lambda: os.startfile(config.config_dir())),
@@ -172,7 +185,8 @@ class TrayApp:
             item("Pause updates", lambda: self._toggle_display_pause(name),
                  checked=lambda _: bool((t := target()) and t.paused)),
             item("Restore clock theme", lambda: self._restore(name)),
-            item("Open web UI", lambda: (t := target()) and webbrowser.open(f"http://{t.host}")),
+            item("Open web UI", lambda: (t := target()) and webbrowser.open(f"http://{t.host}"),
+                 enabled=lambda _: bool((t := target()) and t.host != config.WINDOW_HOST)),
         )
 
     def _aircraft_menu(self) -> pystray.Menu:
@@ -263,6 +277,11 @@ class TrayApp:
         return f"5h {u.five_pct:.0f}% · 7d {u.week_pct:.0f}%"
 
     def _on_update(self, result: Usage | Exception) -> None:
+        self._sync_window()
+        self._update_icon(result)
+        self.bar.update(self.meter.last, self.meter.on_fire, self.meter.burn_rate, self.error)
+
+    def _update_icon(self, result: Usage | Exception) -> None:
         if isinstance(result, Usage):
             self.error = None
             u = result
@@ -318,7 +337,7 @@ class TrayApp:
 
     def _restore_device(self, t: Target) -> None:
         try:
-            Display(UltraDevice(t.host)).restore()
+            self.meter.display_factory(t.host).restore()
         except Exception:
             log.exception("restore %s failed", t.name)
 
@@ -375,6 +394,110 @@ class TrayApp:
             config.save_config(config.load_config())
         os.startfile(path)
 
+    # --- desktop window --------------------------------------------------------
+
+    def _toggle_window(self) -> None:
+        enable = not config.window_enabled()
+        config.set_window_enabled(enable)
+        self.meter.sync_targets()
+        self._sync_window()
+        if enable:
+            self.meter.invalidate()
+            self.wake.set()
+        self._redraw_icon()
+
+    def _sync_window(self) -> None:
+        """Open or close the mirror window to match config (also catches hand edits)."""
+        if config.window_enabled():
+            if self.mirror is None:
+                self._open_window()
+        elif self.mirror is not None:
+            self._close_window()
+
+    def _open_window(self) -> None:
+        ui, dev = winui.ui(), window_device()
+        settings = config.load_config()["window"]
+
+        def close_from_menu() -> None:
+            threading.Thread(target=self._toggle_window, name="window-close", daemon=True).start()
+
+        def make() -> None:
+            if self.mirror is not True:  # closed again before the UI thread got here
+                return
+            self.mirror = winui.MirrorWindow(ui, settings, self._save_window, close_from_menu)
+            self.mirror.set_content(dev.current())
+
+        def show(content: bytes | None) -> None:
+            ui.call(lambda: isinstance(self.mirror, winui.MirrorWindow) and self.mirror.set_content(content))
+
+        self.mirror = True  # being built on the UI thread; stops a second one being made
+        ui.call(make)
+        dev.listener = show
+
+    def _close_window(self) -> None:
+        window_device().listener = lambda _: None
+        mirror, self.mirror = self.mirror, None
+
+        def destroy() -> None:
+            if isinstance(mirror, winui.MirrorWindow):
+                mirror.destroy()
+
+        winui.ui().call(destroy)
+
+    @staticmethod
+    def _save_window(settings: dict) -> None:
+        for key in ("x", "y", "size", "topmost"):
+            config.set_block("window", key, settings.get(key))
+
+    # --- Zebar bar -------------------------------------------------------------
+
+    def _toggle_bar(self) -> None:
+        self.bar.enabled = not self.bar.enabled
+        config.set_block("zebar", "enabled", self.bar.enabled)
+        self.bar.update(self.meter.last, self.meter.on_fire, self.meter.burn_rate, self.error)
+        if self.bar.enabled and not any(zebar.installed(p) for p in zebar.startup_pages()):
+            self.icon.notify("Not in Zebar yet: use Zebar bar > Install into Zebar", APP_NAME)
+        self.icon.update_menu()
+
+    def _install_bar(self) -> None:
+        pages = zebar.startup_pages()
+        if not pages:
+            self.icon.notify(f"No Zebar widgets found in {zebar.zebar_dir()}", APP_NAME)
+            return
+        try:
+            for page in pages:
+                zebar.install(page, int(config.load_config()["zebar"]["port"]))
+        except (OSError, ValueError) as e:
+            log.exception("zebar install failed")
+            self.icon.notify(f"Zebar install failed: {e}"[:250], APP_NAME)
+            return
+        if not self.bar.enabled:
+            self._toggle_bar()
+        self.icon.notify("Installed. Reload Zebar to see it (or restart it).", APP_NAME)
+
+    def _uninstall_bar(self) -> None:
+        removed = [p for p in zebar.startup_pages() if zebar.uninstall(p)]
+        self.icon.notify("Removed from Zebar; reload Zebar to finish." if removed
+                         else "It wasn't installed in Zebar.", APP_NAME)
+
+    def _on_reset(self, windows: list[str]) -> None:
+        """A 5h/7d window reset: pop the celebration GIFs up under the bar section."""
+        if not self.bar.enabled:
+            return
+        cfg = config.load_config()
+        a = self.bar.anchor
+        at = (a["x"] + a["w"] // 2, a["y"] + a["h"]) if a else None
+        winui.popup([anim.reset_gif(w) for w in windows], float(cfg["reset_seconds"]), at,
+                    int(cfg["zebar"]["popup_size"]))
+
+    def _start_bar_server(self) -> None:
+        port = int(config.load_config()["zebar"]["port"])
+        try:
+            server.serve(self.bar, port)
+        except OSError as e:
+            self.bar_error = f"Port {port} is busy: bar unavailable"
+            log.warning("bar server on port %s: %s", port, e)
+
     def _toggle_autostart(self) -> None:
         set_autostart(not autostart_enabled())
 
@@ -386,6 +509,8 @@ class TrayApp:
 
     def _setup(self, icon: pystray.Icon) -> None:
         icon.visible = True
+        self._start_bar_server()
+        self._sync_window()
         worker = threading.Thread(target=self.meter.run, name="meter", daemon=True,
                                   args=(self.stop, self._on_update, self.wake))
         worker.start()

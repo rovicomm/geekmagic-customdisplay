@@ -43,10 +43,13 @@ def _devices(args) -> list[tuple[str, UltraDevice]]:
     """(name, device) pairs selected by --host / --display; defaults to the first display."""
     if args.host:
         return [(args.host, UltraDevice(args.host))]
-    if args.display == "all":
-        return [(d["name"], UltraDevice(d["host"])) for d in config.load_displays()]
+    if args.display == "all":  # the desktop window lives in the tray app, out of reach here
+        return [(d["name"], UltraDevice(d["host"])) for d in config.load_displays()
+                if d["host"] != config.WINDOW_HOST]
     if args.display:
         d = config.find_display(args.display)
+        if d["host"] == config.WINDOW_HOST:
+            raise ValueError(f"{d['name']!r} is the tray app's desktop window; it can't be driven from here")
         return [(d["name"], UltraDevice(d["host"]))]
     host = config.resolve_host()
     return [(host, UltraDevice(host))]
@@ -167,12 +170,32 @@ def cmd_clean(args):
 
 def cmd_displays(args):
     for d in config.load_displays():
+        if d["host"] == config.WINDOW_HOST:
+            print(f'{d["name"]:<12} {d["host"]:<16} {d["app"]:<8} desktop window (tray app)')
+            continue
         try:
             info = UltraDevice(d["host"], timeout=3).info()
             status = f'{info["model"]} {info["version"]}, theme {info["theme"]} ({THEMES.get(info["theme"], "?")})'
         except (DeviceError, OSError) as e:
             status = f"unreachable ({e})" if args.verbose else "unreachable"
         print(f'{d["name"]:<12} {d["host"]:<16} {d["app"]:<8} {status}')
+
+
+def cmd_zebar(args):
+    from clockdisplay.desktop import zebar
+    pages = zebar.startup_pages()
+    if not pages:
+        raise ValueError(f"no Zebar startup widgets found in {zebar.zebar_dir()}")
+    for page in pages:
+        if args.action == "install":
+            zebar.install(page, int(config.load_config()["zebar"]["port"]))
+            print(f"installed into {page}")
+        elif args.action == "uninstall":
+            print(f"removed from {page}" if zebar.uninstall(page) else f"not installed in {page}")
+        else:
+            print(f"{'installed' if zebar.installed(page) else 'not installed':<14} {page}")
+    if args.action != "status":
+        print("reload Zebar (or restart it) to apply; turn it on with the tray's Zebar bar menu")
 
 
 # --- Claude usage ------------------------------------------------------------
@@ -330,6 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("old")
     sp.add_argument("new")
     sp.set_defaults(fn=cmd_rename)
+
+    sp = sub.add_parser("zebar", help="add the Claude usage section to the Zebar (GlazeWM) bar")
+    sp.add_argument("action", nargs="?", default="status", choices=["install", "uninstall", "status"])
+    sp.set_defaults(fn=cmd_zebar)
 
     sub.add_parser("info", help="model, firmware, theme, brightness, storage").set_defaults(fn=cmd_info)
 

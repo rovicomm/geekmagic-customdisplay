@@ -1,0 +1,95 @@
+/* ClockDisplay: Claude usage section for the neosoft Zebar bar (see claude-usage.js). */
+#cd-claude {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 100%;
+  margin-right: 0.75rem;
+  white-space: nowrap;
+  --cd-track: rgba(255, 255, 255, 0.16); /* the bar's own colour vars don't resolve here */
+}
+#cd-claude[hidden] { display: none; }
+#cd-claude.cd-stale { opacity: 0.55; }
+
+#cd-claude .cd-spark {
+  width: 16px;
+  height: 16px;
+  fill: #d97757; /* Claude orange, as on the device */
+}
+
+#cd-claude .cd-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  --cd-level: var(--accent);
+}
+#cd-claude .cd-label {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+#cd-claude .cd-gauge {
+  position: relative;
+  height: 2rem;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#cd-claude .cd-gauge svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#cd-claude .cd-track {
+  fill: transparent;
+  stroke: var(--cd-track);
+  stroke-width: 8;
+}
+#cd-claude .cd-arc {
+  fill: transparent;
+  stroke: var(--cd-level);
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s ease, stroke 0.6s ease;
+}
+#cd-claude .cd-pct,
+#cd-claude .cd-ring-label {
+  position: relative;
+  z-index: 1;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+/* 5h: a bar, with flames rising off the filled part while usage is burning fast. */
+#cd-claude .cd-line {
+  position: relative;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--cd-track);
+}
+#cd-claude .cd-fill {
+  position: relative;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--cd-level);
+  transition: width 0.6s ease, background 0.6s ease;
+}
+#cd-claude .cd-five .cd-pct {
+  min-width: 2.4em;
+}
+#cd-claude .cd-fire {
+  position: absolute;
+  left: 0;
+  bottom: 3px;
+  height: 18px;
+  object-fit: fill;
+  pointer-events: none;
+}
+#cd-claude.cd-on-fire .cd-five .cd-pct {
+  color: #ffe16e;
+  text-shadow: 0 0 4px #e64614;
+}

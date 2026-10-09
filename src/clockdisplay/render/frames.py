@@ -1,6 +1,8 @@
 """Ready-made full-screen 240x240 frames."""
 from __future__ import annotations
 
+import datetime as dt
+
 from PIL import Image, ImageDraw
 
 from clockdisplay.render import canvas, widgets
@@ -26,6 +28,19 @@ def identify(name: str, host: str) -> Image.Image:
     ImageDraw.Draw(img).rounded_rectangle((6, 6, SIZE - 7, SIZE - 7), radius=18, outline=CLAUDE, width=4)
     widgets.text_box(img, name, (24, 50, SIZE - 24, 160), fill=TEXT)
     widgets.text_box(img, host, (24, 172, SIZE - 24, 196), fill=DIM, style="regular", size=18)
+    return img
+
+
+def clock(now: dt.datetime) -> Image.Image:
+    """A plain clock face, for a desktop window "back on its clock theme"."""
+    img = canvas.new()
+    draw = ImageDraw.Draw(img)
+    hm, ampm = now.strftime("%I:%M").lstrip("0"), now.strftime("%p")
+    widgets.text_box(img, hm, (16, 64, SIZE - 16, 148), fill=TEXT)
+    f_small = canvas.font(18, "regular")
+    draw.text((SIZE // 2, 160), f"{ampm}  :{now.second:02d}", font=f_small, fill=CLAUDE, anchor="mt")
+    draw.text((SIZE // 2, 196), now.strftime("%a %b %d").replace(" 0", " "), font=f_small,
+              fill=DIM, anchor="mt")
     return img
 
 
