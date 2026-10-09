@@ -245,6 +245,36 @@ Photos are cached in `photos\` in the data folder. A photo is kept until there a
 Routes are cached in memory for an hour. Regenerate the image above with
 `.venv\Scripts\python scripts\readme_images.py`.
 
+## On the PC: desktop window and Zebar bar
+Two tray toggles show usage without a SmallTV.
+
+**Desktop window** (tray → Desktop window) adds a display named `Desktop` with host `window` to
+`config.json`. The tray pushes to it exactly as it does to a device, so it gets the usage card,
+the fire, the reset GIFs, Identify, aircraft pop-ups and Pause. When it is handed back (Restore),
+it shows a clock. Drag it to move it. Right-click it for Always on top, the size (240/360/480) and
+Close. Its position and size are saved in the `window` block. The window lives in the tray app,
+so `clock -d all …` skips it.
+
+**Zebar bar** puts 5h/7d rings in the [neosoft](https://github.com/blaiyz/neosoft-zebar) Zebar
+bar, between the volume control and the weather/date. The 5h ring catches fire when you're
+burning fast. When a window resets, its "yesss" GIF pops up small under the bar section.
+```powershell
+clock zebar install      # or tray → Zebar bar → Install into Zebar; then restart Zebar
+clock zebar              # status
+clock zebar uninstall
+```
+The install copies `claude-usage.js` / `.css` into the widget pack and adds two tags to its
+`index.html`. It also adds a no-cache rule for the tray's URL to the pack's `zpack.json`.
+Re-run it after updating the pack. The bar reads `http://127.0.0.1:47815`, served by the tray
+app. The section hides when the tray isn't running or the toggle is off.
+
+| key | default | |
+| --- | --- | --- |
+| `zebar.enabled` | `false` | show the bar section (the tray toggle) |
+| `zebar.port` | `47815` | localhost port for the bar; re-run `clock zebar install` after changing it |
+| `zebar.popup_size` | `120` | reset pop-up size in pixels |
+| `window.size` / `topmost` | `240` / `true` | desktop window size and always-on-top |
+
 ## How pushes work
 Showing content switches to the Photo Album theme with autoplay off and remembers the previous
 theme for `clock restore`. This state is kept per display, keyed by host, in `state.json`. Stills overwrite `/image/cm_main.jpg`, animations `/image/cm_anim.gif`.

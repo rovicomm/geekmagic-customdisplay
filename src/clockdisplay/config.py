@@ -53,6 +53,22 @@ ADSB_DEFAULTS = {
 ADSB_FIELDS = ("photo", "callsign", "route", "type", "registration", "operator", "altitude",
                "speed", "distance", "squawk")
 
+# The usage section in the Zebar (GlazeWM) bar, fed by the tray's localhost server.
+ZEBAR_DEFAULTS = {
+    "enabled": False,
+    "port": 47815,
+    "popup_size": 120,      # pixels; the reset GIF pop-up under the bar section
+}
+
+# The floating desktop window: one more display (host "window"), so it mirrors the device.
+WINDOW_HOST = "window"
+WINDOW_DISPLAY = {"name": "Desktop", "host": WINDOW_HOST, "app": "claude"}
+WINDOW_DEFAULTS = {
+    "x": None, "y": None,   # screen position; None = top-right corner
+    "size": 240,
+    "topmost": True,
+}
+
 APPS = ("claude", "adsb", "off")  # what a display can run; "claude" is the usage meter
 _FLAT_STATE = ("previous_theme", "showing", "hash")  # pre-multi-display state.json keys
 
@@ -168,6 +184,9 @@ def load_config() -> dict:
     cfg = {**DEFAULTS, **_read("config.json")}
     adsb = cfg.get("adsb")
     cfg["adsb"] = {**ADSB_DEFAULTS, **(adsb if isinstance(adsb, dict) else {})}
+    for key, defaults in (("zebar", ZEBAR_DEFAULTS), ("window", WINDOW_DEFAULTS)):
+        block = cfg.get(key)
+        cfg[key] = {**defaults, **(block if isinstance(block, dict) else {})}
     cfg["host"] = resolve_host()
     cfg["displays"] = load_displays()
     return cfg
@@ -177,12 +196,40 @@ def save_config(cfg: dict) -> None:
     _write("config.json", cfg)
 
 
-def set_adsb(key: str, value) -> None:
-    """Change one key of the "adsb" block in config.json, leaving the rest of the file alone."""
+def set_block(block: str, key: str, value) -> None:
+    """Change one key of a settings block ("adsb", "zebar", "window") in config.json,
+    leaving the rest of the file alone."""
     raw = _read("config.json")
-    if not isinstance(raw.get("adsb"), dict):
-        raw["adsb"] = {}
-    raw["adsb"][key] = value
+    if not isinstance(raw.get(block), dict):
+        raw[block] = {}
+    raw[block][key] = value
+    save_config(raw)
+
+
+def set_adsb(key: str, value) -> None:
+    set_block("adsb", key, value)
+
+
+def window_enabled() -> bool:
+    return any(d["host"] == WINDOW_HOST for d in load_displays())
+
+
+def set_window_enabled(enabled: bool) -> None:
+    """Add or remove the desktop window in "displays". A legacy single-host config is
+    converted to a list first, so the real display stays configured (with no host configured
+    at all, the window becomes the only display)."""
+    raw = _read("config.json")
+    if not isinstance(raw.get("displays"), list):
+        raw["displays"] = load_displays() if raw.get("host") or os.environ.get("CLOCK_HOST") else []
+        raw.pop("host", None)
+    displays = [d for d in raw["displays"] if not (isinstance(d, dict) and d.get("host") == WINDOW_HOST)]
+    if enabled:
+        name, names = WINDOW_DISPLAY["name"], {d.get("name") for d in displays if isinstance(d, dict)}
+        n = 2
+        while name in names:
+            name, n = f"{WINDOW_DISPLAY['name']} {n}", n + 1
+        displays.append({**WINDOW_DISPLAY, "name": name})
+    raw["displays"] = displays
     save_config(raw)
 
 
