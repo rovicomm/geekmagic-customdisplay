@@ -197,3 +197,84 @@ def test_zebar_install_is_idempotent_and_uninstall_restores(tmp_path):
     assert page.read_text(encoding="utf-8") == PAGE
     assert not (pack / "claude-usage.js").exists()
     assert not zebar.uninstall(page)
+
+
+def _marketplace(root, downloads, pack_id, version, widget="default", html="index.html"):
+    """A pack installed the way the Zebar marketplace does it."""
+    d = downloads / f"{pack_id}@{version}"
+    d.mkdir(parents=True)
+    (d / html).write_text(PAGE, encoding="utf-8")
+    (d / "zpack.json").write_text(json.dumps(
+        {"name": pack_id.split(".", 1)[1], "widgets": [{"name": widget, "htmlPath": f"./{html}"}]}))
+    (root / ".marketplace").mkdir(parents=True, exist_ok=True)
+    (root / ".marketplace" / f"{pack_id}.json").write_text(json.dumps({"packId": pack_id, "version": version}))
+    return d
+
+
+def _startup(root, *configs):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "settings.json").write_text(json.dumps(
+        {"startupConfigs": [{"pack": p, "widget": w, "preset": "default"} for p, w in configs]}))
+
+
+def test_zebar_finds_marketplace_pack_at_its_installed_version(tmp_path):
+    root, downloads = tmp_path / "glzr", tmp_path / "downloads"
+    _marketplace(root, downloads, "blaiyz.neosoft-zebar", "1.2.6")
+    (downloads / "blaiyz.neosoft-zebar@1.2.5").mkdir()  # an old download Zebar no longer uses
+    _startup(root, ("blaiyz.neosoft-zebar", "default"))
+    [t] = zebar.resolve_startup(root, downloads)
+    assert t.page == (downloads / "blaiyz.neosoft-zebar@1.2.6" / "index.html").resolve()
+
+
+def test_zebar_local_pack_id_is_its_name_even_beside_a_marketplace_copy(tmp_path):
+    root, downloads = tmp_path / "glzr", tmp_path / "downloads"
+    local = _pack(root)  # id "neosoft-zebar"
+    _marketplace(root, downloads, "blaiyz.neosoft-zebar", "1.2.6")
+    _startup(root, ("neosoft-zebar", "default"))
+    assert zebar.startup_pages(root, downloads) == [(local / "index.html").resolve()]
+
+
+def test_zebar_explains_what_it_could_not_find(tmp_path):
+    root, downloads = tmp_path / "glzr", tmp_path / "downloads"
+    _marketplace(root, downloads, "glzr-io.starter", "0.0.0", widget="with-glazewm", html="with-glazewm.html")
+    _startup(root, ("someone.missing", "bar"), ("glzr-io.starter", "vanilla"), ("glzr-io.starter", "with-glazewm"))
+    missing, no_widget, ok = zebar.resolve_startup(root, downloads)
+    assert missing.page is None and "someone.missing" in missing.reason and "glzr-io.starter" in missing.reason
+    assert no_widget.page is None and "vanilla" in no_widget.reason
+    assert ok.page.name == "with-glazewm.html" and not ok.neosoft
+
+
+def test_zebar_install_round_trips_on_marketplace_pack(tmp_path):
+    root, downloads = tmp_path / "glzr", tmp_path / "downloads"
+    d = _marketplace(root, downloads, "blaiyz.neosoft-zebar", "1.2.6")
+    _startup(root, ("blaiyz.neosoft-zebar", "default"))
+    [page] = zebar.startup_pages(root, downloads)
+    zebar.install(page, 5000)
+    assert zebar.installed(page) and (d / "claude-usage.js").is_file()
+    [w] = json.loads((d / "zpack.json").read_text())["widgets"]
+    assert w["caching"]["rules"][0]["urlRegex"].endswith(":5000/")
+    assert zebar.uninstall(page) and page.read_text(encoding="utf-8") == PAGE
+
+
+def test_zebar_without_settings_says_so(tmp_path):
+    [t] = zebar.resolve_startup(tmp_path / "nowhere", tmp_path / "downloads")
+    assert t.page is None and "settings.json" in t.reason
+
+
+def test_zebar_install_makes_widget_serve_our_files(tmp_path):
+    root, downloads = tmp_path / "glzr", tmp_path / "downloads"
+    d = _marketplace(root, downloads, "glzr-io.starter", "0.0.0")
+    zpack = json.loads((d / "zpack.json").read_text())
+    zpack["widgets"][0]["includeFiles"] = ["*.html", "*.css"]  # what the starter pack ships
+    (d / "zpack.json").write_text(json.dumps(zpack))
+    _startup(root, ("glzr-io.starter", "default"))
+    [page] = zebar.startup_pages(root, downloads)
+
+    def include():
+        return json.loads((d / "zpack.json").read_text())["widgets"][0]["includeFiles"]
+
+    zebar.install(page, 47815)
+    zebar.install(page, 47815)
+    assert include() == ["*.html", "*.css", "claude-usage.js"]  # the .css was already served
+    zebar.uninstall(page)
+    assert include() == ["*.html", "*.css"]

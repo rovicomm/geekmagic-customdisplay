@@ -263,9 +263,14 @@ clock zebar install      # or tray → Zebar bar → Install into Zebar; then re
 clock zebar              # status
 clock zebar uninstall
 ```
-The install copies `claude-usage.js` / `.css` into the widget pack and adds two tags to its
-`index.html`. It also adds a no-cache rule for the tray's URL to the pack's `zpack.json`.
-Re-run it after updating the pack. The bar reads `http://127.0.0.1:47815`, served by the tray
+The install finds the widgets Zebar starts (`startupConfigs` in `~/.glzr/zebar/settings.json`)
+the same way Zebar does. Local packs are in `~/.glzr/zebar`, and marketplace packs are in
+`%APPDATA%\zebar\downloads`. `clock zebar` lists each widget and where its page is, or why it
+couldn't be found. The install copies `claude-usage.js` / `.css` next to the widget's page and
+adds two tags to it. In the pack's `zpack.json`, it lists the two files in the widget's
+`includeFiles` (if they aren't served already) and adds a no-cache rule for the tray's URL.
+Re-run it after updating the pack; a marketplace update replaces it. In neosoft the section goes
+between volume and weather/date. In other bars it goes at the start of the right-hand group. The bar reads `http://127.0.0.1:47815`, served by the tray
 app. The section hides when the tray isn't running or the toggle is off.
 
 | key | default | |

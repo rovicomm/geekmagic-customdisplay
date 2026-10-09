@@ -29,19 +29,57 @@
       </div>
     </div>`;
 
-  // Right before the weather (or the dot ahead of the date when there's no weather yet).
-  // Svelte inserts the weather in front of its own anchor, which may land it before us, so
-  // this runs again on every DOM change; it only moves our node, never the bar's.
+  // neosoft: right before the weather (or the dot ahead of the date when there's no weather
+  // yet). Svelte inserts the weather in front of its own anchor, which may land it before us,
+  // so this runs again on every DOM change; it only moves our node, never the bar's.
   // Nothing is touched until the app is live (the date has text): SvelteKit hydrates the
   // prerendered markup in place, and an extra node in it makes hydration fail.
-  function place() {
+  function neosoftSpot() {
     const dot = document.querySelector(".tabler-icon-point-filled.mr-2");
     const row = dot?.parentElement;
-    if (!row || !row.querySelector("p.whitespace-nowrap")?.textContent.trim()) return;
-    const target = row.querySelector(":scope > .truncate") || dot;
-    if (el.parentElement !== row || el.nextElementSibling !== target) row.insertBefore(el, target);
+    if (!row || !row.querySelector("p.whitespace-nowrap")?.textContent.trim()) return null;
+    return { kind: "neosoft", row, before: row.querySelector(":scope > .truncate") || dot };
   }
-  new MutationObserver(place).observe(document.body, { childList: true, subtree: true });
+
+  // Any other bar: the start of the right-hand group. Probe leftwards from the right edge
+  // (bars often have padding there) for the first item, then take the outermost flex row
+  // around it that is narrower than most of the bar: the group, not one item inside it.
+  // Only tried once the page has been quiet for a while, so the bar has finished rendering.
+  function fallbackSpot() {
+    const y = window.innerHeight / 2;
+    for (let x = window.innerWidth - 4; x > window.innerWidth * 0.6; x -= 8) {
+      let group = null;
+      for (let n = document.elementFromPoint(x, y); n && n !== document.body; n = n.parentElement) {
+        if (n === el || el.contains(n)) continue;
+        const cs = getComputedStyle(n);
+        if (cs.display.includes("flex") && !cs.flexDirection.startsWith("column")
+            && n.getBoundingClientRect().width < window.innerWidth * 0.6) group = n;
+      }
+      const first = group && [...group.children].find((c) => c !== el);
+      if (first) return { kind: "fallback", row: group, before: first };
+    }
+    return null;
+  }
+
+  let quiet = false;
+  let quietTimer = 0;
+  function place() {
+    const spot = neosoftSpot() || (quiet && fallbackSpot());
+    if (!spot) return;
+    el.dataset.cdAnchor = spot.kind;
+    if (el.parentElement !== spot.row || el.nextElementSibling !== spot.before) spot.row.insertBefore(el, spot.before);
+  }
+  const settle = () => { quiet = true; place(); };
+  new MutationObserver((records) => {
+    if (records.every((r) => r.target === el || el.contains(r.target))) return; // our own updates
+    if (!quiet) {
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(settle, 3000);
+    }
+    place();
+  }).observe(document.body, { childList: true, subtree: true });
+  quietTimer = setTimeout(settle, 3000);
+  setTimeout(settle, 10000); // bars that redraw every second or two are never quiet for 3s
   place();
 
   // 5h: a bar like the device card's, with flames rising off the filled part when on fire.
